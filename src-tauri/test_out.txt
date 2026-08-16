@@ -1,0 +1,16 @@
+warning: linker stdout: Creando biblioteca c:\Users\estra\PycharmProjects\bankomunales\src-tauri\target\debug\deps\bankomunales_lib.dll.lib y objeto c:\Users\estra\PycharmProjects\bankomunales\src-tauri\target\debug\deps\bankomunales_lib.dll.exp
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+   Compiling bankomunales v0.1.0 (C:\Users\estra\PycharmProjects\bankomunales\src-tauri)
+warning: `bankomunales` (lib) generated 1 warning
+error[E0560]: struct `auth::domain::NuevoBankomunal` has no field named `codigo`
+   --> src\modules\auth\application.rs:170:13
+    |
+170 |             codigo: "TEBA".into(),
+    |             ^^^^^^ `auth::domain::NuevoBankomunal` does not have this field
+    |
+    = note: all struct fields are already assigned
+
+For more information about this error, try `rustc --explain E0560`.
+error: could not compile `bankomunales` (lib test) due to 1 previous error

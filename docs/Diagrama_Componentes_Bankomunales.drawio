@@ -1,0 +1,187 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.5.2 Chrome/142.0.7444.265 Electron/39.6.1 Safari/537.36" version="29.5.2">
+  <diagram name="Diagrama de Componentes - Bankomunales" id="componentes-bankomunales">
+    <mxGraphModel dx="1713" dy="992" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="3300" pageHeight="4681" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="k2001" parent="1" style="rounded=0;whiteSpace=wrap;html=1;verticalAlign=top;align=left;fontStyle=1;fontSize=13;fillColor=#F5F5F5;strokeColor=#333333;spacing=8;dashed=1;" value="Aplicación de Escritorio (Tauri Shell)" vertex="1">
+          <mxGeometry height="760" width="1300" x="40" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="k2002" parent="1" style="rounded=0;whiteSpace=wrap;html=1;verticalAlign=top;align=left;fontStyle=1;fontSize=13;fillColor=#FFF2CC;strokeColor=#333333;spacing=8;dashed=1;" value="Backend - Rust" vertex="1">
+          <mxGeometry height="500" width="1220" x="80" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="k2003" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#D5E8D4;strokeColor=#82B366;fontSize=12;fontStyle=1;" value="Frontend - React (UI, Presentación)" vertex="1">
+          <mxGeometry height="70" width="260" x="500" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="k2014" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#F8CECC;strokeColor=#B85450;fontSize=12;fontStyle=1;" value="Persistencia SQLite (por Bankomunal)" vertex="1">
+          <mxGeometry height="70" width="260" x="500" y="850" as="geometry" />
+        </mxCell>
+        <mxCell id="k2015" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#F8CECC;strokeColor=#B85450;fontSize=12;fontStyle=1;" value="Sistema de Archivos (Respaldo/Restauración)" vertex="1">
+          <mxGeometry height="70" width="280" x="900" y="850" as="geometry" />
+        </mxCell>
+        <mxCell id="k2016" edge="1" parent="1" source="k2003" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2004">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="k2017" edge="1" parent="1" source="k2003" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2005">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="560" y="230" />
+              <mxPoint x="440" y="230" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2018" edge="1" parent="1" source="k2003" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2006">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="630" y="230" />
+              <mxPoint x="700" y="230" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2019" edge="1" parent="1" source="k2003" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2007">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="k2020" edge="1" parent="1" source="k2003" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2008">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="k2021" edge="1" parent="1" source="k2003" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" target="k2009">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="k2022" edge="1" parent="1" source="k2003" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2010">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="560" y="280" />
+              <mxPoint x="470" y="280" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2023" edge="1" parent="1" source="k2003" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2011">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="k2024" edge="1" parent="1" source="k2003" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2012">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="880" y="135" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2025" edge="1" parent="1" source="k2003" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2013">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1110" y="135" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2026" edge="1" parent="1" source="k2004" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;exitX=0.5;exitY=1;exitDx=0;exitDy=0;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="309.9999999999998" y="369.9988235294117" as="sourcePoint" />
+            <mxPoint x="629.9411764705883" y="894.94" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2027" edge="1" parent="1" source="k2005" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2014">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="470" y="605" />
+              <mxPoint x="630" y="605" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2028" edge="1" parent="1" source="k2006" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2014">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="670" y="605" />
+              <mxPoint x="630" y="605" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2029" edge="1" parent="1" source="k2007" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2014">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="880" y="590" />
+              <mxPoint x="630" y="590" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2030" edge="1" parent="1" source="k2008" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2014">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1130" y="560" />
+              <mxPoint x="630" y="560" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2031" edge="1" parent="1" source="k2009" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2014">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="250" y="530" />
+              <mxPoint x="630" y="530" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2032" edge="1" parent="1" source="k2010" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2014">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="k2033" edge="1" parent="1" source="k2011" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2014">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="730" y="655" />
+              <mxPoint x="630" y="655" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2034" edge="1" parent="1" source="k2013" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2014">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1110" y="630" />
+              <mxPoint x="630" y="630" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2035" edge="1" parent="1" source="k2012" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2014">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="870" y="530" />
+              <mxPoint x="630" y="530" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="k2036" edge="1" parent="1" source="k2012" style="edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;dashed=1;endArrow=open;endFill=0;fontSize=10;labelBackgroundColor=#ffffff;" target="k2015" value="IArchivo">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="k2037" parent="1" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontStyle=2;fontColor=#666666;" value="Toda comunicación Frontend→Backend ocurre vía invoke() : IComandosTauri (comandos #[tauri::command]), sin red ni servidor HTTP de por medio." vertex="1">
+          <mxGeometry height="30" width="600" x="90" y="170" as="geometry" />
+        </mxCell>
+        <mxCell id="k2004" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;fontStyle=1;" value="Módulo Autenticación" vertex="1">
+          <mxGeometry height="70" width="200" x="110" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="k2009" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;fontStyle=1;" value="Módulo Caja y Contabilidad" vertex="1">
+          <mxGeometry height="70" width="200" x="110" y="390" as="geometry" />
+        </mxCell>
+        <mxCell id="k2010" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;fontStyle=1;" value="Módulo Cierre Mensual" vertex="1">
+          <mxGeometry height="70" width="200" x="340" y="390" as="geometry" />
+        </mxCell>
+        <mxCell id="k2005" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;fontStyle=1;" value="Módulo Configuración" vertex="1">
+          <mxGeometry height="70" width="200" x="340" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="k2011" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;fontStyle=1;" value="Módulo Reportes" vertex="1">
+          <mxGeometry height="70" width="200" x="570" y="390" as="geometry" />
+        </mxCell>
+        <mxCell id="k2013" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;fontStyle=1;" value="Módulo Auditoría" vertex="1">
+          <mxGeometry height="70" width="200" x="1030" y="390" as="geometry" />
+        </mxCell>
+        <mxCell id="k2008" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;fontStyle=1;" value="Módulo Créditos" vertex="1">
+          <mxGeometry height="70" width="200" x="1030" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="k2012" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;fontStyle=1;" value="Módulo Respaldo" vertex="1">
+          <mxGeometry height="70" width="200" x="800" y="390" as="geometry" />
+        </mxCell>
+        <mxCell id="k2007" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;fontStyle=1;" value="Módulo Acciones" vertex="1">
+          <mxGeometry height="70" width="200" x="800" y="290" as="geometry" />
+        </mxCell>
+        <mxCell id="k2006" parent="1" style="shape=component;whiteSpace=wrap;html=1;align=center;verticalAlign=middle;fillColor=#DAE8FC;strokeColor=#6C8EBF;fontSize=12;fontStyle=1;" value="Módulo Socios" vertex="1">
+          <mxGeometry height="70" width="200" x="570" y="290" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
