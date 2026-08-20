@@ -46,8 +46,12 @@ Pendiente de decidir: se reimplementa RF-03 con la clave, o se actualiza esta de
 
 ## D-02: Fórmula del PPCFC (RN-09)
 
-**Estado:** Aceptada de forma tentativa por el cliente (2026-08-12) — **falta que la
-organización la corrobore formalmente**.
+**Estado:** Aceptada de forma tentativa por el cliente (2026-08-12); **confirmada la fórmula
+por el cliente (2026-08-18)** — el % de colocación del mes es
+`(dinero prestado/colocado en créditos vigentes ÷ total del fondo de crédito disponible ese mes) × 100`,
+equivalente a `cartera ÷ (efectivo + cartera)`. El denominador es el **total del fondo**
+(efectivo + cartera), no solo el efectivo: con solo efectivo el resultado superaría el 100%
+y los tramos de RN-09 (80/90/100) perderían sentido.
 
 La primera lectura del cliente (*"el monto que haya ÷ el número de acciones × 100"*) daba
 *dinero por acción*, no un porcentaje, y los rangos de RN-09 (<80%, 80-90%, 90-100%) sólo

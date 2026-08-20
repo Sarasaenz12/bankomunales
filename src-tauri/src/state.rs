@@ -6,6 +6,7 @@ use crate::modules::auth::application::AuthService;
 use crate::modules::auth::domain::Bankomunal;
 use crate::modules::caja::application::CajaService;
 use crate::modules::configuracion::application::ConfigService;
+use crate::modules::creditos::application::CreditoService;
 use crate::modules::socios::application::SocioService;
 
 /// Estado global de sesión de la aplicación (composition root).
@@ -17,6 +18,7 @@ pub struct AppState {
     pub socios: Arc<SocioService>,
     pub caja: Arc<CajaService>,
     pub acciones: Arc<AccionesService>,
+    pub creditos: Arc<CreditoService>,
     banco_seleccionado: Mutex<Option<String>>,
 }
 
@@ -27,6 +29,7 @@ impl AppState {
         socios: Arc<SocioService>,
         caja: Arc<CajaService>,
         acciones: Arc<AccionesService>,
+        creditos: Arc<CreditoService>,
     ) -> Self {
         Self {
             auth,
@@ -34,6 +37,7 @@ impl AppState {
             socios,
             caja,
             acciones,
+            creditos,
             banco_seleccionado: Mutex::new(None),
         }
     }

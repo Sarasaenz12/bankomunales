@@ -19,6 +19,11 @@ use modules::auditoria::data::SqliteAuditoria;
 use modules::caja::application::CajaService;
 use modules::caja::data::{SqliteBienes, SqliteFondoGastos, SqliteLibro};
 use modules::configuracion::data::SqliteConfiguracion;
+use modules::creditos::application::CreditoService;
+use modules::creditos::data::{
+    AccionesParaCreditoAdapter, LibroViaCaja as LibroViaCajaCreditos, ParametrosCreditoAdapter,
+    SociosParaCreditoAdapter, SqliteCreditos, SqliteSolicitudes,
+};
 use modules::socios::application::SocioService;
 use modules::socios::data::SqliteSocios;
 use state::AppState;
@@ -65,10 +70,19 @@ pub fn run() {
                 Arc::new(SqliteLotesAcciones::new(db.clone())),
                 Arc::new(SqliteParametrosAcciones::new(db.clone())),
                 Arc::new(LibroViaCaja::new(caja.clone())),
-                Arc::new(SqliteCierres::new(db)),
+                Arc::new(SqliteCierres::new(db.clone())),
             ));
 
-            app.manage(AppState::new(auth, config, socios, caja, acciones));
+            let creditos: Arc<CreditoService> = Arc::new(CreditoService::new(
+                Arc::new(SqliteSolicitudes::new(db.clone())),
+                Arc::new(SqliteCreditos::new(db.clone())),
+                Arc::new(ParametrosCreditoAdapter::new(db.clone())),
+                Arc::new(AccionesParaCreditoAdapter::new(db.clone())),
+                Arc::new(SociosParaCreditoAdapter::new(db.clone())),
+                Arc::new(LibroViaCajaCreditos::new(caja.clone())),
+            ));
+
+            app.manage(AppState::new(auth, config, socios, caja, acciones, creditos));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -103,6 +117,14 @@ pub fn run() {
             modules::acciones::presentation::total_acciones,
             modules::acciones::presentation::historial_acciones_socio,
             modules::acciones::presentation::cupo_del_mes,
+            modules::creditos::presentation::previsualizar_tabla_credito,
+            modules::creditos::presentation::registrar_solicitud,
+            modules::creditos::presentation::decidir_solicitud,
+            modules::creditos::presentation::listar_solicitudes,
+            modules::creditos::presentation::listar_solicitudes_desembolsables,
+            modules::creditos::presentation::previsualizar_desembolso,
+            modules::creditos::presentation::registrar_desembolso,
+            modules::creditos::presentation::buscar_credito_por_solicitud,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

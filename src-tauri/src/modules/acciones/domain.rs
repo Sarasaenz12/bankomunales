@@ -66,6 +66,8 @@ pub struct ResumenMesAcciones {
     pub liquidadas: i64,
     /// Acciones acumuladas del socio al cierre de ese mes.
     pub saldo: i64,
+    /// Cuánto pagó el socio por las acciones compradas en ese mes (RF-22).
+    pub monto_pagado: f64,
 }
 
 /// Parámetros del Bankomunal que necesita este módulo.

@@ -189,11 +189,13 @@ impl AccionesService {
                         compradas: 0,
                         liquidadas: 0,
                         saldo: 0,
+                        monto_pagado: 0.0,
                     });
                     meses.last_mut().expect("recién insertado")
                 }
             };
             fila.compradas += lote.cantidad;
+            fila.monto_pagado += lote.monto_pagado;
             if lote.liquidada {
                 fila.liquidadas += lote.cantidad;
             }

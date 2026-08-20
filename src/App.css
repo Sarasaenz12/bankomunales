@@ -367,6 +367,20 @@ body {
   background-color: var(--bg-color);
 }
 
+.btn:disabled,
+.btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.btn-secondary:disabled,
+.btn-secondary[disabled] {
+  background-color: var(--surface-color);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+}
+
 .card {
   background-color: var(--surface-color);
   border-radius: 12px;
@@ -634,4 +648,49 @@ body {
   text-align: center;
   color: var(--text-muted);
   font-size: 0.875rem;
+}
+
+/* Tabla de amortización de créditos: permite scroll horizontal en pantallas angostas */
+.tabla-scroll {
+  overflow-x: auto;
+}
+
+.tabla-scroll .activity-table th,
+.tabla-scroll .activity-table td {
+  padding: 0.625rem 1rem 0.625rem 0;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.tabla-scroll .activity-table th:first-child,
+.tabla-scroll .activity-table td:first-child {
+  text-align: left;
+}
+
+/* Validaciones automáticas del formulario de crédito (RN-03, RN-04, RN-05) */
+.valida-item {
+  background-color: #f8fafc;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+/* Detalle de un crédito desde la bandeja de solicitudes */
+.stat-chip {
+  background-color: #f8fafc;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.625rem 0.875rem;
+}
+
+.stat-num {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-main);
+  margin-top: 0.25rem;
+}
+
+.badge-pagado {
+  background-color: #dcfce7;
+  color: #166534;
 }
