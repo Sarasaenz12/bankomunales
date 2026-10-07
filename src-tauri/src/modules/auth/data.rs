@@ -1,4 +1,4 @@
-use rusqlite::params;
+use rusqlite::{params, ErrorCode};
 
 use crate::core::db::DbManager;
 use crate::core::error::AppError;
@@ -6,6 +6,17 @@ use crate::core::error::AppError;
 use super::domain::{
     AppSettingsPort, BancoCatalogoPort, Bankomunal, NuevoBankomunal, PasswordHasherPort,
 };
+
+/// Traduce una violación del índice UNIQUE del nombre a un error de dominio claro
+/// (RF-04). Cualquier otro fallo de SQLite se propaga tal cual.
+fn mapear_nombre_duplicado(e: rusqlite::Error) -> AppError {
+    if let rusqlite::Error::SqliteFailure(err, _) = &e {
+        if err.code == ErrorCode::ConstraintViolation {
+            return AppError::NombreDuplicado;
+        }
+    }
+    AppError::from(e)
+}
 
 /// Adaptador SQLite para las claves de configuración a nivel aplicación (app.db).
 pub struct SqliteAppSettings {
@@ -67,9 +78,6 @@ impl SqliteBancoCatalogo {
 
 impl BancoCatalogoPort for SqliteBancoCatalogo {
     fn crear(&self, id: &str, fecha_creacion: &str, nuevo: &NuevoBankomunal) -> Result<Bankomunal, AppError> {
-        // Crea el .db independiente del Bankomunal con su esquema (RF-08).
-        self.db.open_banco_db(id)?;
-
         let db_path = self
             .db
             .banco_db_path(id)
@@ -85,6 +93,9 @@ impl BancoCatalogoPort for SqliteBancoCatalogo {
             db_path,
         };
 
+        // Se registra primero la fila del catálogo: si el nombre choca con el índice UNIQUE
+        // (RF-04, condición de carrera incluida) el fallo ocurre ANTES de tocar el disco,
+        // por lo que no quedan archivos .db huérfanos.
         let conn = self.db.open_app_db()?;
         conn.execute(
             "INSERT INTO catalogo_bankomunal
@@ -98,7 +109,13 @@ impl BancoCatalogoPort for SqliteBancoCatalogo {
                 banco.fecha_creacion,
                 banco.db_path
             ],
-        )?;
+        )
+        .map_err(mapear_nombre_duplicado)?;
+
+        // Sólo tras registrar el catálogo se crea el .db del Banco con su esquema (RF-08).
+        // Si esto fallara, la fila queda sin archivo y `open_banco_db` lo recrea de forma
+        // idempotente la próxima vez que se seleccione el Banco (auto-reparable).
+        self.db.open_banco_db(id)?;
         Ok(banco)
     }
 
@@ -129,9 +146,10 @@ impl BancoCatalogoPort for SqliteBancoCatalogo {
 
     fn buscar_por_nombre(&self, nombre: &str) -> Result<Option<Bankomunal>, AppError> {
         let conn = self.db.open_app_db()?;
+        // COLLATE NOCASE: la unicidad del nombre no distingue mayúsculas (RF-04).
         let mut stmt = conn.prepare(
             "SELECT id, nombre, ubicacion, moneda, fecha_creacion, db_path
-             FROM catalogo_bankomunal WHERE nombre = ?1",
+             FROM catalogo_bankomunal WHERE nombre = ?1 COLLATE NOCASE",
         )?;
         let mut rows = stmt.query(params![nombre])?;
         match rows.next()? {

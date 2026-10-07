@@ -6,6 +6,9 @@ export const authService = {
 
     listarBankomunales: () => api.listarBankomunales(),
 
+    /** RF-06: si existe exactamente un Bankomunal lo devuelve; si no, `null`. */
+    unicoBankomunal: () => api.unicoBankomunal(),
+
     crearBankomunal: (nuevo: NuevoBankomunal) => api.crearBankomunal(nuevo),
 
     seleccionarBankomunal: (id: string) => api.seleccionarBankomunal(id),
@@ -13,6 +16,9 @@ export const authService = {
     volverASeleccion: () => api.volverASeleccion(),
 
     bancoSeleccionado: () => api.bancoSeleccionado(),
+
+    /** Si esta sesión ya inició sesión con la contraseña (no volver a pedirla). */
+    sesionIniciada: () => api.sesionIniciada(),
 
     /** Si hay un banco activo lo devuelve; si no, devuelve `null`. */
     async bancoActual(): Promise<Bankomunal | null> {

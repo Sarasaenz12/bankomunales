@@ -13,6 +13,9 @@ export function AppLayout() {
     const [bank, setBank] = useState<Bankomunal | null>(null);
 
     useEffect(() => {
+        // Sin un Bankomunal seleccionado, todos los comandos fallan con
+        // `SinBancoSeleccionado` y no carga nada: hay que volver a la pantalla de
+        // selección para elegir uno.
         api.bancoSeleccionado().then(b => {
             if (!b) { navigate('/'); return; }
             setBank(b);

@@ -2,9 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::error::AppError;
 
-/// RN-14: todo crédito debe tener al menos un fiador que sea socio del Bankomunal.
-pub const MIN_FIADORES: usize = 1;
-/// RF-48: se registran hasta 2 fiadores por solicitud.
+/// RF-48: se registran hasta 2 fiadores por solicitud. El mínimo (RN-14: al menos un
+/// fiador socio) se valida directamente comprobando que la lista no esté vacía.
 pub const MAX_FIADORES: usize = 2;
 
 /// Frecuencia de pago de los créditos. El sistema en papel trabaja con pagos
@@ -211,6 +210,19 @@ pub struct NuevoDesembolso {
     pub fecha: Option<String>,
 }
 
+/// Datos para refinanciar un crédito (RF-77 a RF-82).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NuevoRefinanciamiento {
+    pub credito_id_anterior: String,
+    pub monto: f64,
+    pub plazo_cuotas: i64,
+    pub intereses_en_efectivo: bool,
+    #[serde(default)]
+    pub fiadores: Vec<FiadorSolicitud>,
+    #[serde(default)]
+    pub fecha: Option<String>,
+}
+
 /// Garantía de una solicitud (socio titular o fiador, RF-48).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GarantiaSolicitud {
@@ -384,9 +396,10 @@ fn dias_del_mes(anio: i64, mes: i64) -> i64 {
     }
 }
 
-/// Redondea a 2 decimales para evitar ruido de coma flotante en el dinero.
+/// Redondea a peso entero: el dinero del Bankomunal no maneja centavos (COP). La última
+/// cuota absorbe el residuo del redondeo para que el capital sume exactamente el monto.
 fn redondear(v: f64) -> f64 {
-    (v * 100.0).round() / 100.0
+    v.round()
 }
 
 /// --- Puertos (hexagonal) ---
@@ -405,7 +418,8 @@ pub trait SolicitudPort: Send + Sync {
         solicitud: &SolicitudCredito,
         garantias: &[GarantiaSolicitud],
     ) -> Result<(), AppError>;
-    fn buscar_por_id(&self, banco_id: &str, id: &str) -> Result<Option<SolicitudCredito>, AppError>;
+    fn buscar_por_id(&self, banco_id: &str, id: &str)
+        -> Result<Option<SolicitudCredito>, AppError>;
     fn listar_por_estado(
         &self,
         banco_id: &str,
@@ -428,13 +442,45 @@ pub trait CreditoPort: Send + Sync {
         banco_id: &str,
         solicitud_id: &str,
     ) -> Result<Option<Credito>, AppError>;
+    fn actualizar_estatus(
+        &self,
+        banco_id: &str,
+        credito_id: &str,
+        estatus: &str,
+    ) -> Result<(), AppError>;
+    /// RF-77..RF-82: salda el crédito anterior al refinanciarlo. Lo marca REFINANCIADO
+    /// y pone su `saldo_pendiente` en 0: su capital pendiente se traslada (rola) al
+    /// crédito nuevo, así que no debe seguir contando en la cartera. Dejar el saldo
+    /// vivo descuadraría el Balance (el capital viejo desaparecería del Activo sin
+    /// contrapartida en caja).
+    fn saldar_por_refinanciamiento(&self, banco_id: &str, credito_id: &str)
+        -> Result<(), AppError>;
+    /// RF-28 (venta parcial → abono a deuda): abona `monto` al CAPITAL del crédito, bajando
+    /// su `saldo_pendiente` (nunca por debajo de 0) y las cuotas pendientes desde la última
+    /// hacia atrás, para que el cronograma no siga cobrando el capital ya abonado. Si el
+    /// saldo llega a 0 el crédito queda PAGADO. Devuelve el nuevo saldo. No mueve caja: la
+    /// contrapartida es la liquidación de acciones que origina el abono. Todo en una sola tx.
+    fn abonar_capital(
+        &self,
+        banco_id: &str,
+        credito_id: &str,
+        monto: f64,
+    ) -> Result<f64, AppError>;
+    /// Borra un crédito con sus cuotas y garantías (una sola transacción). Sólo se usa
+    /// para deshacer un desembolso/refinanciamiento cuyo asiento en caja falló, de modo
+    /// que no quede un crédito sin su movimiento en el Libro (consistencia caja↔cartera).
+    fn eliminar(&self, banco_id: &str, credito_id: &str) -> Result<(), AppError>;
+    /// Interés pendiente del crédito a la fecha (RF-77..82): `(ordinario, mora)` en pesos
+    /// enteros. Ordinario = Σ (interes − interes_pagado) de las cuotas no pagadas; mora =
+    /// Σ de la mora exigible de las cuotas vencidas. Al refinanciar se reconoce como
+    /// ingreso (OR + MO) para que la caja quede exacta.
+    fn interes_pendiente(&self, banco_id: &str, credito_id: &str, fecha: &str)
+        -> Result<(f64, f64), AppError>;
     fn listar(&self, banco_id: &str) -> Result<Vec<Credito>, AppError>;
     /// RF-53: siguiente número de crédito en secuencia.
     fn siguiente_numero(&self, banco_id: &str) -> Result<String, AppError>;
     /// Pares (titular, fiador) de créditos vigentes, para validar RN-05.
     fn pares_titular_fiador(&self, banco_id: &str) -> Result<Vec<(String, String)>, AppError>;
-    /// RN-03: número de créditos VIGENTES de un socio.
-    fn contar_vigentes(&self, banco_id: &str, socio_id: &str) -> Result<i64, AppError>;
 }
 
 /// Parámetros del Bankomunal que necesita este módulo (RF-55, RN-03/04, RF-59).
@@ -460,6 +506,8 @@ pub trait AccionesParaCreditoPort: Send + Sync {
 /// Acceso mínimo a socios para validar fiadores (RF-49, RN-14).
 pub trait SociosParaCreditoPort: Send + Sync {
     fn buscar_por_cedula(&self, banco_id: &str, cedula: &str) -> Result<Option<String>, AppError>;
+    /// Nombre completo de un socio por su id, para mensajes legibles (no exponer el UUID).
+    fn nombre_de_socio(&self, banco_id: &str, socio_id: &str) -> Result<Option<String>, AppError>;
 }
 
 /// Asiento en el Libro de Ingresos y Egresos que produce un desembolso (RF-62).
@@ -472,6 +520,34 @@ pub trait LibroContablePort: Send + Sync {
         socio_id: &str,
         credito_id: &str,
         descripcion: &str,
+    ) -> Result<(), AppError>;
+    fn registrar_refinanciamiento(
+        &self,
+        banco_id: &str,
+        fecha: &str,
+        monto: f64,
+        socio_id: &str,
+        credito_id: &str,
+        descripcion: &str,
+    ) -> Result<(), AppError>;
+    /// Reconoce como ingreso el interés ordinario pendiente que se salda al refinanciar
+    /// (OR), sea cobrado en efectivo o capitalizado en el nuevo crédito (RF-77..82).
+    fn registrar_interes_ordinario(
+        &self,
+        banco_id: &str,
+        fecha: &str,
+        monto: f64,
+        socio_id: &str,
+        credito_id: &str,
+    ) -> Result<(), AppError>;
+    /// Reconoce como ingreso la mora pendiente que se salda al refinanciar (MO).
+    fn registrar_mora(
+        &self,
+        banco_id: &str,
+        fecha: &str,
+        monto: f64,
+        socio_id: &str,
+        credito_id: &str,
     ) -> Result<(), AppError>;
 }
 
@@ -487,12 +563,12 @@ mod tests {
         let cuotas = calcular_tabla(1_000_000.0, 3.0, 12, "2026-09-01");
         assert_eq!(cuotas.len(), 12);
 
-        // Capital fijo = 1.000.000 / 12 (redondeado).
-        assert_eq!(cuotas[0].capital, 83_333.33);
+        // Capital fijo = 1.000.000 / 12 (redondeado a peso entero).
+        assert_eq!(cuotas[0].capital, 83_333.0);
         // Interés de la cuota 1 sobre el monto total.
-        assert_eq!(cuotas[0].interes, 30_000.00);
-        // La cuota 2 ya interesa sobre saldo menor: 1.000.000 − 83.333,33.
-        assert_eq!(cuotas[1].interes, 27_500.00);
+        assert_eq!(cuotas[0].interes, 30_000.0);
+        // La cuota 2 ya interesa sobre saldo menor: 1.000.000 − 83.333.
+        assert_eq!(cuotas[1].interes, 27_500.0);
 
         // El interés decrece cuota a cuota.
         for w in cuotas.windows(2) {
@@ -508,18 +584,18 @@ mod tests {
     /// El capital de todas las cuotas debe sumar exactamente el monto original.
     #[test]
     fn el_capital_suma_exactamente_el_monto() {
-        let monto = 999_999.99;
+        let monto = 1_000_000.0;
         let cuotas = calcular_tabla(monto, 3.0, 12, "2026-09-01");
         let total_capital: f64 = cuotas.iter().map(|c| c.capital).sum();
-        assert!((total_capital - monto).abs() < 0.01);
+        assert_eq!(total_capital, monto);
     }
 
     /// La última cuota absorbe el redondeo: puede diferir levemente del capital fijo.
     #[test]
     fn la_ultima_cuota_absorbe_el_redondeo() {
         let cuotas = calcular_tabla(100_000.0, 3.0, 3, "2026-09-01");
-        let resto = 100_000.0 - 2.0 * 33_333.33;
-        assert!((cuotas[2].capital - resto).abs() < 0.01);
+        let resto = 100_000.0 - 2.0 * 33_333.0;
+        assert_eq!(cuotas[2].capital, resto);
     }
 
     /// Los vencimientos avanzan de mes en mes.
@@ -542,7 +618,9 @@ mod tests {
         let cuotas = calcular_tabla(100_000.0, 3.0, 3, "2026-09-01");
         let resumen = resumir_tabla(&cuotas, 3);
         assert_eq!(resumen.cuota_mensual, cuotas[0].valor_total);
-        assert!((resumen.monto_total - cuotas.iter().map(|c| c.valor_total).sum::<f64>()).abs() < 0.01);
+        assert!(
+            (resumen.monto_total - cuotas.iter().map(|c| c.valor_total).sum::<f64>()).abs() < 0.01
+        );
     }
 
     #[test]
@@ -562,15 +640,27 @@ mod tests {
             assert_eq!(DestinoCredito::desde_str(destino.as_str()), Some(destino));
         }
         assert_eq!(DestinoCredito::desde_str("XXX"), None);
-        assert_eq!(EstadoSolicitud::desde_str(EstadoSolicitud::Diferida.as_str()), EstadoSolicitud::Diferida);
-        assert_eq!(EstadoCredito::desde_str(EstadoCredito::Pagado.as_str()), EstadoCredito::Pagado);
-        assert_eq!(RolGarantia::desde_str(RolGarantia::Fiador.as_str()), RolGarantia::Fiador);
+        assert_eq!(
+            EstadoSolicitud::desde_str(EstadoSolicitud::Diferida.as_str()),
+            EstadoSolicitud::Diferida
+        );
+        assert_eq!(
+            EstadoCredito::desde_str(EstadoCredito::Pagado.as_str()),
+            EstadoCredito::Pagado
+        );
+        assert_eq!(
+            RolGarantia::desde_str(RolGarantia::Fiador.as_str()),
+            RolGarantia::Fiador
+        );
     }
 
     /// Un destino desconocido no debe admitirse (RF-47, RN-11).
     #[test]
     fn el_destino_debe_ser_del_catalogo() {
-        assert!(DestinoCredito::desde_str("CRV").is_none(), "CRV era una errata de CVR (D-15)");
+        assert!(
+            DestinoCredito::desde_str("CRV").is_none(),
+            "CRV era una errata de CVR (D-15)"
+        );
         assert!(DestinoCredito::desde_str("SP").is_some());
     }
 }

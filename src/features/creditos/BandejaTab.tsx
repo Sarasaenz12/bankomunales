@@ -5,6 +5,7 @@ import { ETIQUETA_ESTADO, DESTINOS_CREDITO, Credito, SolicitudCredito, EstadoSol
 import { fmt } from '../../core/lib/format';
 import { SocioResumen } from '../socios/types';
 import { sociosService } from '../socios/sociosService';
+import { useEnvioUnico } from '../../core/lib/useEnvioUnico';
 
 export function BandejaTab({ moneda }: { moneda: string }) {
     const [solicitudes, setSolicitudes] = useState<SolicitudCredito[]>([]);
@@ -16,12 +17,13 @@ export function BandejaTab({ moneda }: { moneda: string }) {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [creditoVisto, setCreditoVisto] = useState<{ solId: string; credito: Credito | null } | null>(null);
+    const { enviando, ejecutar } = useEnvioUnico();
 
     function recargar() {
         creditosService.listarSolicitudes(null)
             .then(setSolicitudes)
             .catch(e => setError(e?.toString() ?? 'Error al cargar solicitudes'));
-        sociosService.listar().then(setSocios).catch(() => {});
+        sociosService.listar().then(setSocios).catch(() => { });
     }
     useEffect(() => { recargar(); }, []);
 
@@ -38,7 +40,6 @@ export function BandejaTab({ moneda }: { moneda: string }) {
         try {
             const credito = await creditosService.buscarCreditoPorSolicitud(sol.id);
             setCreditoVisto({ solId: sol.id, credito });
-            if (!credito) setError('Esta solicitud todavía no tiene un crédito desembolsado.');
         } catch (err: any) {
             setError(err?.toString() ?? 'No se pudo consultar el crédito');
         }
@@ -73,6 +74,9 @@ export function BandejaTab({ moneda }: { moneda: string }) {
                     </button>
                 ))}
             </div>
+
+            {error && <div className="error-message mt-4">{error}</div>}
+            {success && <div className="success-message mt-4">{success}</div>}
 
             {visibles.length === 0 && <div className="empty-state">No hay solicitudes {filtro !== 'TODAS' ? ETIQUETA_ESTADO[filtro as EstadoSolicitud].toLowerCase() : ''}.</div>}
 
@@ -124,14 +128,14 @@ export function BandejaTab({ moneda }: { moneda: string }) {
                             {decisiones[sol.id] === 'DIFERIDA' && (
                                 <div className="form-group custom-fg mt-4">
                                     <label className="form-label">Observación (obligatoria)</label>
-                                    <input className="form-input" placeholder="Motivo de la diferida (RF-51)"
+                                    <input className="form-input" placeholder="Motivo de la diferida"
                                         value={observaciones[sol.id] ?? ''}
                                         onChange={e => setObservaciones({ ...observaciones, [sol.id]: e.target.value })} />
                                 </div>
                             )}
 
-                            <button className="btn btn-primary mt-4" onClick={() => decidir(sol)}>
-                                Registrar decisión
+                            <button className="btn btn-primary mt-4" onClick={() => ejecutar(() => decidir(sol))} disabled={enviando}>
+                                {enviando ? 'Registrando…' : 'Registrar decisión'}
                             </button>
                         </div>
                     )}
@@ -144,19 +148,16 @@ export function BandejaTab({ moneda }: { moneda: string }) {
                         </div>
                     )}
 
-                    {creditoVisto?.solId === sol.id && creditoVisto.credito && (
+                    {creditoVisto?.solId === sol.id && (
                         <DetalleCredito
                             credito={creditoVisto.credito}
+                            solicitud={sol}
                             moneda={moneda}
                             nombreSocio={nombreSocio}
-                            onClose={() => setCreditoVisto(null)}
                         />
                     )}
                 </div>
             ))}
-
-            {error && <div className="error-message mt-4">{error}</div>}
-            {success && <div className="success-message mt-4">{success}</div>}
         </div>
     );
 }

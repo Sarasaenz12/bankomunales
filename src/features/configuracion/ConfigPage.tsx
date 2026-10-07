@@ -2,21 +2,50 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { configuracionService } from './configuracionService';
 import { Configuracion, DatosGenerales } from '../../core/types';
-import { fmt } from '../../core/lib/format';
+import { fmt, fmtNum, parseNum } from '../../core/lib/format';
 import { PageHeader } from '../../core/components/PageHeader';
 import { useBanco } from '../../core/context/BankContext';
 
-function fmts(n: number) {
-    if (n >= 1000000) return `$${(n / 1000000).toFixed(2)}M`;
-    if (n >= 1000) return `$${(n / 1000).toFixed(1)}K`;
-    return `$${n}`;
-}
+/** Todos los campos numéricos de la Configuración. Fuente única para convertir el
+ *  formulario (que edita en texto) hacia y desde la entidad tipada. */
+const CAMPOS_CONFIG: (keyof Configuracion)[] = [
+    'valor_nominal', 'pct_garantia_socio', 'pct_garantia_fiador', 'pct_fondo_gastos',
+    'pct_fondo_incobrables', 'tope_reserva_incobrables_pct', 'ppcfc_venta_rango1_pct',
+    'ppcfc_venta_rango2_pct', 'tope_individual_mensual_pct', 'plazo_maximo_cuotas',
+    'tasa_interes_ordinario', 'tasa_interes_mora', 'monto_maximo_credito',
+];
+
+/** El formulario guarda los valores como texto mientras se teclea (un input vacío o "3."
+ *  no es un número válido todavía). No se finge que sea `Configuracion`. */
+type ConfigForm = Record<keyof Configuracion, string>;
+
+const aFormulario = (c: Configuracion): ConfigForm =>
+    Object.fromEntries(CAMPOS_CONFIG.map(k => [k, String(c[k])])) as ConfigForm;
+
+const aConfiguracion = (f: ConfigForm): Configuracion => {
+    const num = (s: string) => (Number.isNaN(Number(s)) ? 0 : Number(s));
+    return {
+        valor_nominal: num(f.valor_nominal),
+        pct_garantia_socio: num(f.pct_garantia_socio),
+        pct_garantia_fiador: num(f.pct_garantia_fiador),
+        pct_fondo_gastos: num(f.pct_fondo_gastos),
+        pct_fondo_incobrables: num(f.pct_fondo_incobrables),
+        tope_reserva_incobrables_pct: num(f.tope_reserva_incobrables_pct),
+        ppcfc_venta_rango1_pct: num(f.ppcfc_venta_rango1_pct),
+        ppcfc_venta_rango2_pct: num(f.ppcfc_venta_rango2_pct),
+        tope_individual_mensual_pct: num(f.tope_individual_mensual_pct),
+        plazo_maximo_cuotas: num(f.plazo_maximo_cuotas),
+        tasa_interes_ordinario: num(f.tasa_interes_ordinario),
+        tasa_interes_mora: num(f.tasa_interes_mora),
+        monto_maximo_credito: num(f.monto_maximo_credito),
+    };
+};
 
 export function ConfigPage() {
     const navigate = useNavigate();
     const bank = useBanco();
     const [datos, setDatos] = useState<DatosGenerales | null>(null);
-    const [config, setConfig] = useState<Configuracion | null>(null);
+    const [config, setConfig] = useState<ConfigForm | null>(null);
 
     const [quienRealiza, setQuienRealiza] = useState('');
     const [motivo, setMotivo] = useState('');
@@ -32,7 +61,7 @@ export function ConfigPage() {
     const loadData = async () => {
         try {
             const { config, datos } = await configuracionService.cargarTodo();
-            setConfig(config);
+            setConfig(aFormulario(config));
             setDatos(datos);
         } catch (err: any) {
             setError(err?.toString() || 'Error al cargar configuración');
@@ -44,13 +73,40 @@ export function ConfigPage() {
         setError('');
         setSuccess('');
 
-        if (!quienRealiza) {
+        if (!quienRealiza.trim()) {
             return setError('Debes indicar tu nombre para confirmar el cambio.');
         }
         if (!config) return;
 
+        // El formulario edita en texto; aquí se parsea a la entidad tipada (números).
+        const updatedConfig = aConfiguracion(config);
+
+        // Validaciones clave de los fondos.
+        if (updatedConfig.pct_fondo_gastos + updatedConfig.pct_fondo_incobrables > 100) {
+            return setError('La suma del Fondo de Gastos y Fondo de Incobrables no puede ser mayor a 100%.');
+        }
+        if (updatedConfig.valor_nominal <= 0) {
+            return setError('El valor nominal de la acción debe ser mayor a 0.');
+        }
+        if (updatedConfig.plazo_maximo_cuotas <= 0) {
+            return setError('El plazo máximo de crédito debe ser mayor a 0.');
+        }
+        if (updatedConfig.monto_maximo_credito <= 0) {
+            return setError('El monto máximo de crédito debe ser mayor a 0.');
+        }
+        if (updatedConfig.tasa_interes_ordinario < 0 || updatedConfig.tasa_interes_mora < 0) {
+            return setError('Las tasas de interés no pueden ser negativas.');
+        }
+
+        const pctFields = ['pct_garantia_socio', 'pct_garantia_fiador', 'pct_fondo_gastos', 'pct_fondo_incobrables', 'tope_reserva_incobrables_pct', 'ppcfc_venta_rango1_pct', 'ppcfc_venta_rango2_pct', 'tope_individual_mensual_pct'];
+        for (const field of pctFields) {
+            if (updatedConfig[field as keyof Configuracion] < 0 || updatedConfig[field as keyof Configuracion] > 100) {
+                return setError('Los porcentajes de fondos y garantías deben estar entre 0 y 100.');
+            }
+        }
+
         try {
-            await configuracionService.guardar(config, quienRealiza, motivo || 'Modificación de parámetros');
+            await configuracionService.guardar(updatedConfig, quienRealiza.trim(), motivo.trim() || 'Modificación de parámetros');
             setSuccess('Configuración guardada exitosamente.');
             setQuienRealiza('');
             setMotivo('');
@@ -62,7 +118,7 @@ export function ConfigPage() {
 
     const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const { name, value } = e.target;
-        setConfig(prev => prev ? ({ ...prev, [name]: parseFloat(value) || 0 }) : null);
+        setConfig(prev => prev ? { ...prev, [name]: value } : null);
     };
 
     if (!config || !datos) {
@@ -126,7 +182,7 @@ export function ConfigPage() {
                         </div>
                         <div className="card" style={{ padding: '1.5rem', width: '100%', maxWidth: 'none', boxShadow: 'none', border: '1px solid var(--border-color)' }}>
                             <div className="text-sm text-muted mb-1">Monto total créditos</div>
-                            <div style={{ fontSize: '1.5rem', fontWeight: 600 }}>{fmts(datos.monto_total_creditos)}</div>
+                            <div style={{ fontSize: '1.5rem', fontWeight: 600 }}>{fmt(datos.monto_total_creditos)}</div>
                         </div>
                         <div className="card" style={{ padding: '1.5rem', width: '100%', maxWidth: 'none', boxShadow: 'none', border: '1px solid var(--border-color)' }}>
                             <div className="text-sm text-muted mb-1">Acciones vendidas</div>
@@ -134,11 +190,11 @@ export function ConfigPage() {
                         </div>
                         <div className="card" style={{ padding: '1.5rem', width: '100%', maxWidth: 'none', boxShadow: 'none', border: '1px solid var(--border-color)' }}>
                             <div className="text-sm text-muted mb-1">Fondo de Gastos</div>
-                            <div style={{ fontSize: '1.5rem', fontWeight: 600 }}>{fmts(datos.saldo_fondo_gastos)}</div>
+                            <div style={{ fontSize: '1.5rem', fontWeight: 600 }}>{fmt(datos.saldo_fondo_gastos)}</div>
                         </div>
                         <div className="card" style={{ gridColumn: '1 / -1', padding: '1.5rem', width: '100%', maxWidth: 'none', boxShadow: 'none', border: '1px solid var(--border-color)' }}>
                             <div className="text-sm text-muted mb-1">Fondo de Incobrables</div>
-                            <div style={{ fontSize: '1.5rem', fontWeight: 600 }}>{fmts(datos.saldo_fondo_incobrables)}</div>
+                            <div style={{ fontSize: '1.5rem', fontWeight: 600 }}>{fmt(datos.saldo_fondo_incobrables)}</div>
                         </div>
                     </div>
                 </div>
@@ -164,14 +220,16 @@ export function ConfigPage() {
                             </div>
                             <div className="form-group custom-fg">
                                 <label className="form-label">Monto máximo</label>
-                                <input type="number" name="monto_maximo_credito" className="form-input" value={config.monto_maximo_credito} onChange={handleInputChange} min="0" />
+                                <input type="text" inputMode="numeric" name="monto_maximo_credito" className="form-input"
+                                    value={config.monto_maximo_credito ? fmtNum(parseNum(config.monto_maximo_credito)) : ''}
+                                    onChange={e => setConfig(prev => prev ? { ...prev, monto_maximo_credito: e.target.value.replace(/\D/g, '') } : null)} />
                             </div>
                         </div>
                     </div>
 
                     {/* GARANTÍAS */}
                     <div className="config-section">
-                        <h3 className="section-title">GARANTÍAS (RN-04)</h3>
+                        <h3 className="section-title">GARANTÍAS</h3>
                         <div className="config-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
                             <div className="form-group custom-fg">
                                 <label className="form-label">% exigido al socio</label>
@@ -186,7 +244,7 @@ export function ConfigPage() {
 
                     {/* FONDOS */}
                     <div className="config-section">
-                        <h3 className="section-title">FONDOS (RN-07, RN-08)</h3>
+                        <h3 className="section-title">FONDOS</h3>
                         <p className="text-sm text-muted" style={{ fontSize: '12px', marginTop: '-0.5rem', marginBottom: '1rem' }}>
                             Cada fondo aparta un % de las ganancias del mes en el Cierre. Lo que queda se reparte entre los socios.
                         </p>
@@ -224,16 +282,18 @@ export function ConfigPage() {
 
                     {/* ACCIONES */}
                     <div className="config-section">
-                        <h3 className="section-title">ACCIONES (RN-13)</h3>
+                        <h3 className="section-title">ACCIONES</h3>
                         <div className="form-group custom-fg" style={{ maxWidth: '300px' }}>
                             <label className="form-label">Valor nominal de la acción</label>
-                            <input type="number" name="valor_nominal" className="form-input" value={config.valor_nominal} onChange={handleInputChange} min="1" step="any" required />
+                            <input type="text" inputMode="numeric" name="valor_nominal" className="form-input"
+                                value={config.valor_nominal ? fmtNum(parseNum(config.valor_nominal)) : ''}
+                                onChange={e => setConfig(prev => prev ? { ...prev, valor_nominal: e.target.value.replace(/\D/g, '') } : null)} required />
                         </div>
                     </div>
 
                     {/* VENTA DE ACCIONES */}
                     <div className="config-section">
-                        <h3 className="section-title">VENTA DE ACCIONES (RN-09, RN-15)</h3>
+                        <h3 className="section-title">VENTA DE ACCIONES</h3>
 
                         <table style={{ width: '100%', marginBottom: '1.5rem', borderCollapse: 'collapse' }}>
                             <thead>
@@ -260,12 +320,12 @@ export function ConfigPage() {
 
                         <div className="config-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
                             <div className="form-group custom-fg">
-                                <label className="form-label">Tope individual mensual por socio (%) — RN-15</label>
+                                <label className="form-label">Tope individual mensual por socio (%)</label>
                                 <input type="number" name="tope_individual_mensual_pct" className="form-input" value={config.tope_individual_mensual_pct} onChange={handleInputChange} min="0" max="100" />
                                 <div className="text-sm text-muted mt-1" style={{ fontSize: '11px' }}>
                                     % del cupo que el PPCFC autorizó vender este mes que puede tomar un
                                     solo socio — no del capital total. Distinto del 15% de participación
-                                    acumulada (RN-02); ambos topes aplican.
+                                    acumulada; ambos topes aplican.
                                 </div>
                             </div>
                             <div className="form-group custom-fg">

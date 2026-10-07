@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { accionesService } from './accionesService';
 import { sociosService } from '../socios/sociosService';
 import { CalculoCompra, CupoMensual, AutorizacionVenta } from './types';
 import { SocioResumen } from '../socios/types';
-import { fmt } from '../../core/lib/format';
+import { fmt, fmtNum, parseNum } from '../../core/lib/format';
+import { BuscadorSocio } from '../../core/components/BuscadorSocio';
 
 export function CompraTab({ moneda }: { moneda: string }) {
     const navigate = useNavigate();
@@ -21,6 +22,7 @@ export function CompraTab({ moneda }: { moneda: string }) {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [guardando, setGuardando] = useState(false);
+    const enviando = useRef(false);
 
     useEffect(() => { recargar(); }, []);
 
@@ -40,24 +42,35 @@ export function CompraTab({ moneda }: { moneda: string }) {
         const importe = Number(monto);
         if (!socio || !importe || importe <= 0) { setCalculo(null); return; }
         let vigente = true;
-        accionesService.previsualizarCompra(socio.id, importe)
-            .then(c => { if (vigente) { setCalculo(c); setError(''); } })
-            .catch(e => { if (vigente) { setCalculo(null); setError(e?.toString() ?? ''); } });
-        return () => { vigente = false; };
+        const debouncer = setTimeout(() => {
+            accionesService.previsualizarCompra(socio.id, importe)
+                .then(c => { if (vigente) { setCalculo(c); setError(''); } })
+                .catch(e => { if (vigente) { setCalculo(null); setError(e?.toString() ?? ''); } });
+        }, 400);
+        return () => {
+            vigente = false;
+            clearTimeout(debouncer);
+        };
     }, [socio, monto]);
 
     async function registrar(e: React.FormEvent) {
         e.preventDefault();
+        if (enviando.current || guardando) return;
         if (!socio) return;
+        enviando.current = true;
         setError(''); setSuccess(''); setGuardando(true);
         try {
             const lote = await accionesService.registrarCompra(socio.id, fecha, Number(monto));
             setSuccess(`Compra registrada: ${lote.cantidad} acciones por ${fmt(lote.monto_pagado, moneda)}.`);
+            // Se deja el formulario limpio para poder seguir registrando otra compra:
+            // sin esto el socio quedaba seleccionado y el botón bloqueado por falta de monto.
             setMonto(''); setCalculo(null);
+            setSocio(null); setBusqueda('');
             await recargar();
         } catch (err: any) {
             setError(err?.toString() ?? 'No se pudo registrar la compra');
         } finally {
+            enviando.current = false;
             setGuardando(false);
         }
     }
@@ -65,9 +78,6 @@ export function CompraTab({ moneda }: { moneda: string }) {
     const q = busqueda.trim().toLowerCase();
     const coincide = (s: SocioResumen) =>
         s.nombre_completo.toLowerCase().includes(q) || s.cedula.toLowerCase().includes(q);
-    const coincidencias = q && !socio
-        ? socios.filter(coincide).slice(0, 6)
-        : [];
     // Existe alguien ya registrado en el sistema con esos datos (activo o no).
     const yaRegistrado = q && !socio && todos.some(coincide);
 
@@ -79,12 +89,15 @@ export function CompraTab({ moneda }: { moneda: string }) {
             {/* ── Socio ── */}
             <h3 className="section-title">SOCIO</h3>
             <div className="list-toolbar">
-                <input
-                    className="form-input"
-                    placeholder="Buscar por cédula o nombre..."
-                    value={socio ? `${socio.nombre_completo} — ${socio.cedula}` : busqueda}
-                    onChange={e => { setSocio(null); setBusqueda(e.target.value); }}
-                />
+                <div style={{ flex: 1 }}>
+                    <BuscadorSocio
+                        placeholder="Buscar por cédula o nombre..."
+                        socios={socios}
+                        valor={socio ? `${socio.nombre_completo} — ${socio.cedula}` : busqueda}
+                        onBusqueda={setBusqueda}
+                        onSelect={s => { setSocio(s); setBusqueda(''); }}
+                    />
+                </div>
                 <button
                     className="btn btn-secondary"
                     disabled={!puedeCrearNuevo}
@@ -97,22 +110,8 @@ export function CompraTab({ moneda }: { moneda: string }) {
                 </button>
             </div>
 
-            {coincidencias.length > 0 && (
-                <div className="detalle-card" style={{ padding: '0.5rem', marginBottom: '1rem' }}>
-                    {coincidencias.map(s => (
-                        <button
-                            key={s.id}
-                            className="chip"
-                            style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 4 }}
-                            onClick={() => { setSocio(s); setBusqueda(''); }}
-                        >
-                            {s.nombre_completo} — {s.cedula}
-                        </button>
-                    ))}
-                </div>
-            )}
-            {q && !socio && coincidencias.length === 0 && (
-                <div className="text-sm text-muted mb-4">
+            {q && !socio && !socios.some(coincide) && (
+                <div className="text-sm text-muted mb-4 mt-2">
                     {yaRegistrado
                         ? 'Ya existe un socio registrado con esos datos (puede estar retirado).'
                         : 'No hay nadie registrado con esos datos. Use "+ Nuevo Socio" para crearlo.'}
@@ -131,9 +130,9 @@ export function CompraTab({ moneda }: { moneda: string }) {
                 <div className="form-group custom-fg">
                     <label className="form-label">Monto a invertir</label>
                     <input
-                        type="number" className="form-input" min="1" step="any"
-                        placeholder="Ej: 100000"
-                        value={monto} onChange={e => setMonto(e.target.value)}
+                        type="text" inputMode="numeric" className="form-input"
+                        placeholder="Ej: 100.000"
+                        value={monto ? fmtNum(parseNum(monto)) : ''} onChange={e => setMonto(e.target.value.replace(/\D/g, ''))}
                     />
                 </div>
                 <div className="form-group custom-fg">
@@ -168,7 +167,7 @@ export function CompraTab({ moneda }: { moneda: string }) {
                         alerta={calculo.supera_tope_participacion}
                     />
                     <div className="text-sm text-muted" style={{ fontSize: 11 }}>
-                        Límite 15% (RN-02)
+                        Límite 15%
                         {calculo.tope_en_periodo_de_gracia &&
                             ' — todavía no aplica: el tope rige desde el tercer mes de operaciones'}
                     </div>
@@ -178,7 +177,7 @@ export function CompraTab({ moneda }: { moneda: string }) {
             {calculo?.supera_tope_participacion && (
                 <div className="error-message mt-4">
                     Esta compra dejaría al socio con el {calculo.participacion_pct.toFixed(2)}% de las
-                    acciones. Ningún socio puede superar el 15% del total (RN-02).
+                    acciones. Ningún socio puede superar el 15% del total.
                 </div>
             )}
             {error && <div className="error-message mt-4">{error}</div>}
@@ -223,7 +222,7 @@ function PanelCupo({ cupo, moneda }: { cupo: CupoMensual; moneda: string }) {
                         />
                         {cupo.tope_individual_monto !== null && (
                             <div className="text-sm text-muted mt-1" style={{ fontSize: 11 }}>
-                                Máximo por socio este mes: {fmt(cupo.tope_individual_monto, moneda)} (RN-15)
+                                Máximo por socio este mes: {fmt(cupo.tope_individual_monto, moneda)}
                             </div>
                         )}
                     </div>
@@ -233,7 +232,7 @@ function PanelCupo({ cupo, moneda }: { cupo: CupoMensual; moneda: string }) {
             {a.estado === 'NoAutoriza' && (
                 <div className="error-message" style={{ margin: 0 }}>
                     El PPCFC del mes es {a.ppcfc_pct.toFixed(0)}%, por debajo del 80%: este mes no
-                    se venden acciones (RN-09).
+                    se venden acciones.
                 </div>
             )}
 

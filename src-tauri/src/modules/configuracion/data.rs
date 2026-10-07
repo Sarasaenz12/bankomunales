@@ -4,6 +4,7 @@ use rusqlite::{params, Connection};
 use crate::core::db::DbManager;
 use crate::core::error::AppError;
 use crate::modules::configuracion::domain::{Configuracion, ConfiguracionPort, DatosGenerales};
+use crate::modules::socios::domain::EstatusSocio;
 
 fn row_to_configuracion(row: &rusqlite::Row) -> rusqlite::Result<Configuracion> {
     Ok(Configuracion {
@@ -150,6 +151,11 @@ impl ConfiguracionPort for SqliteConfiguracion {
             params![banco_id],
             |r| r.get(0),
         )?;
+        let socios_activos: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM socio WHERE estatus = ?1",
+            params![EstatusSocio::Activo.as_str()],
+            |r| r.get(0),
+        )?;
 
         let mut stmt = conn.prepare(
             "SELECT id, nombre, ubicacion, fecha_creacion, moneda
@@ -170,6 +176,7 @@ impl ConfiguracionPort for SqliteConfiguracion {
             numero_acciones_vendidas,
             saldo_fondo_gastos,
             saldo_fondo_incobrables,
+            socios_activos,
         })
     }
 }

@@ -56,7 +56,7 @@ export function CajaPage() {
                 <div className="kpi-card">
                     <div className="kpi-label">Fondo para Gastos</div>
                     <div className="kpi-value">{resumen ? fmt(resumen.saldo_fondo_gastos, moneda) : '…'}</div>
-                    <div className="kpi-sub">Para gastos operativos (RN-07)</div>
+                    <div className="kpi-sub">Para gastos operativos</div>
                 </div>
                 <div className="kpi-card">
                     <div className="kpi-label">Activo fijo</div>

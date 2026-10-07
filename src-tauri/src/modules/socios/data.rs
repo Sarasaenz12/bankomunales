@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use uuid::Uuid;
 
 use crate::core::db::DbManager;
@@ -25,8 +25,14 @@ impl SqliteSocios {
     /// seguro que reconciliar altas y bajas fila por fila (KISS), y son a lo sumo
     /// 3 filas por socio.
     fn reemplazar_allegados(tx: &Transaction, socio: &Socio) -> Result<(), AppError> {
-        tx.execute("DELETE FROM beneficiario WHERE socio_id = ?1", params![socio.id])?;
-        tx.execute("DELETE FROM protegido WHERE socio_id = ?1", params![socio.id])?;
+        tx.execute(
+            "DELETE FROM beneficiario WHERE socio_id = ?1",
+            params![socio.id],
+        )?;
+        tx.execute(
+            "DELETE FROM protegido WHERE socio_id = ?1",
+            params![socio.id],
+        )?;
 
         if let Some(b) = &socio.beneficiario {
             tx.execute(
@@ -61,9 +67,8 @@ impl SqliteSocios {
 
     /// Reconstruye el socio completo a partir de su fila y las de sus allegados.
     fn hidratar(conn: &Connection, fila: FilaSocio) -> Result<Socio, AppError> {
-        let mut stmt = conn.prepare(
-            "SELECT nombre, cedula, parentesco FROM beneficiario WHERE socio_id = ?1",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT nombre, cedula, parentesco FROM beneficiario WHERE socio_id = ?1")?;
         let mut rows = stmt.query(params![fila.id])?;
         let beneficiario = match rows.next()? {
             Some(row) => Some(Beneficiario {
@@ -116,7 +121,7 @@ impl SqliteSocios {
 
 const SELECT_SOCIO: &str = "SELECT id, cedula, nombres, apellidos, profesion, direccion,
             telefono, celular, correo, estatus, fecha_ingreso, fecha_retiro,
-            saldo_incobrable
+            saldo_incobrable, numero
      FROM socio";
 
 /// Proyección plana de la tabla `socio`, sin sus allegados. Existe para poder soltar el
@@ -136,6 +141,7 @@ struct FilaSocio {
     fecha_ingreso: String,
     fecha_retiro: Option<String>,
     saldo_incobrable: Option<f64>,
+    numero: Option<i64>,
 }
 
 impl FilaSocio {
@@ -154,12 +160,14 @@ impl FilaSocio {
             fecha_ingreso: row.get(10)?,
             fecha_retiro: row.get(11)?,
             saldo_incobrable: row.get(12)?,
+            numero: row.get(13)?,
         })
     }
 
     fn en_socio(self, beneficiario: Option<Beneficiario>, protegidos: Vec<Protegido>) -> Socio {
         Socio {
             id: self.id,
+            numero: self.numero.unwrap_or(0),
             cedula: self.cedula,
             nombres: self.nombres,
             apellidos: self.apellidos,
@@ -187,8 +195,8 @@ impl SocioPort for SqliteSocios {
         tx.execute(
             "INSERT INTO socio
              (id, cedula, nombres, apellidos, profesion, direccion, telefono, celular,
-              correo, estatus, fecha_ingreso, fecha_retiro, saldo_incobrable)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+              correo, estatus, fecha_ingreso, fecha_retiro, saldo_incobrable, numero)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 socio.id,
                 socio.cedula,
@@ -203,11 +211,22 @@ impl SocioPort for SqliteSocios {
                 socio.fecha_ingreso,
                 socio.fecha_retiro,
                 socio.saldo_incobrable,
+                socio.numero,
             ],
         )?;
         Self::reemplazar_allegados(&tx, socio)?;
         tx.commit()?;
         Ok(())
+    }
+
+    fn siguiente_numero(&self, banco_id: &str) -> Result<i64, AppError> {
+        let conn = self.db.open_banco_db(banco_id)?;
+        let siguiente: i64 = conn.query_row(
+            "SELECT COALESCE(MAX(numero), 0) + 1 FROM socio",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(siguiente)
     }
 
     fn actualizar(&self, banco_id: &str, socio: &Socio) -> Result<(), AppError> {
@@ -259,13 +278,14 @@ impl SocioPort for SqliteSocios {
         let filas = stmt
             .query_map([], FilaSocio::desde_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        drop(stmt);
 
-        let mut socios = Vec::with_capacity(filas.len());
-        for fila in filas {
-            socios.push(Self::hidratar(&conn, fila)?);
-        }
-        Ok(socios)
+        // Roster: NO se hidratan beneficiario ni protegidos (ver contrato del puerto).
+        // El detalle completo se obtiene con `buscar_por_id`. Así se evitan las N+1
+        // consultas por socio que, además, todos los consumidores del listado descartan.
+        Ok(filas
+            .into_iter()
+            .map(|fila| fila.en_socio(None, Vec::new()))
+            .collect())
     }
 
     fn contar_activos(&self, banco_id: &str) -> Result<usize, AppError> {
@@ -276,5 +296,74 @@ impl SocioPort for SqliteSocios {
             |r| r.get(0),
         )?;
         Ok(total as usize)
+    }
+
+    fn marcar_retiro(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+        estatus: EstatusSocio,
+        fecha_retiro: &str,
+        saldo_incobrable: f64,
+    ) -> Result<(), AppError> {
+        let conn = self.db.open_banco_db(banco_id)?;
+        let filas = conn.execute(
+            "UPDATE socio SET estatus = ?2, fecha_retiro = ?3, saldo_incobrable = ?4 WHERE id = ?1",
+            params![socio_id, estatus.as_str(), fecha_retiro, saldo_incobrable],
+        )?;
+        // Un id inexistente no debe pasar como retiro exitoso (consistente con `actualizar`).
+        if filas == 0 {
+            return Err(AppError::SocioNoEncontrado);
+        }
+        Ok(())
+    }
+
+    fn listar_retirados_con_deuda(&self, banco_id: &str) -> Result<Vec<Socio>, AppError> {
+        let conn = self.db.open_banco_db(banco_id)?;
+        let sql = format!("{SELECT_SOCIO} WHERE estatus = ?1 ORDER BY apellidos, nombres");
+        let mut stmt = conn.prepare(&sql)?;
+        let filas = stmt
+            .query_map(
+                params![EstatusSocio::RetiradoConDeuda.as_str()],
+                FilaSocio::desde_row,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        // Roster (sin allegados), igual que `listar`: su único consumidor —la bandeja de
+        // deuda incobrable— sólo necesita nombre, cédula y saldo.
+        Ok(filas
+            .into_iter()
+            .map(|fila| fila.en_socio(None, Vec::new()))
+            .collect())
+    }
+
+    fn abonar_deuda_incobrable(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+        monto: f64,
+    ) -> Result<f64, AppError> {
+        let conn = self.db.open_banco_db(banco_id)?;
+        let saldo_actual: f64 = conn
+            .query_row(
+                "SELECT COALESCE(saldo_incobrable, 0) FROM socio WHERE id = ?1",
+                params![socio_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or(AppError::SocioNoEncontrado)?;
+        // El dinero del Bankomunal va en pesos enteros (COP): el saldo incobrable también,
+        // consistente con el cuadre y con [[dinero-pesos-enteros]]. Nada de centavos.
+        let nuevo_saldo = (saldo_actual - monto).max(0.0).round();
+        let nuevo_estatus = if nuevo_saldo <= 0.0 {
+            EstatusSocio::RetiradoDeudaSaldada
+        } else {
+            EstatusSocio::RetiradoConDeuda
+        };
+        conn.execute(
+            "UPDATE socio SET saldo_incobrable = ?2, estatus = ?3 WHERE id = ?1",
+            params![socio_id, nuevo_saldo, nuevo_estatus.as_str()],
+        )?;
+        Ok(nuevo_saldo)
     }
 }

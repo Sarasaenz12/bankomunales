@@ -144,14 +144,15 @@ pub fn calcular_ppcfc(colocaciones: &[f64]) -> Option<f64> {
 }
 
 /// Aplica los tramos de RN-09 sobre un PPCFC ya calculado.
-pub fn tramo_de_venta(
-    ppcfc_pct: f64,
-    params: &ParametrosAcciones,
-) -> Option<(f64, f64, f64)> {
+pub fn tramo_de_venta(ppcfc_pct: f64, params: &ParametrosAcciones) -> Option<(f64, f64, f64)> {
     if ppcfc_pct < PPCFC_UMBRAL_MINIMO {
         None
     } else if ppcfc_pct < PPCFC_UMBRAL_MEDIO {
-        Some((PPCFC_UMBRAL_MINIMO, PPCFC_UMBRAL_MEDIO, params.ppcfc_venta_rango1_pct))
+        Some((
+            PPCFC_UMBRAL_MINIMO,
+            PPCFC_UMBRAL_MEDIO,
+            params.ppcfc_venta_rango1_pct,
+        ))
     } else {
         Some((PPCFC_UMBRAL_MEDIO, 100.0, params.ppcfc_venta_rango2_pct))
     }
@@ -161,15 +162,68 @@ pub fn tramo_de_venta(
 
 pub trait LoteAccionesPort: Send + Sync {
     fn crear(&self, banco_id: &str, lote: &LoteAcciones) -> Result<(), AppError>;
-    fn listar_de_socio(&self, banco_id: &str, socio_id: &str) -> Result<Vec<LoteAcciones>, AppError>;
+    /// Borra un lote. Sólo se usa para deshacer una compra cuyo asiento en caja (VC)
+    /// falló, y así no dejar acciones sin su ingreso en el Libro (consistencia).
+    fn eliminar(&self, banco_id: &str, lote_id: &str) -> Result<(), AppError>;
+    fn listar_de_socio(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+    ) -> Result<Vec<LoteAcciones>, AppError>;
     /// Acciones vigentes de un socio (las de lotes no liquidados).
     fn acciones_de_socio(&self, banco_id: &str, socio_id: &str) -> Result<i64, AppError>;
+    /// Capital que un socio tiene invertido en lotes vigentes: Σ del `monto_pagado` de sus
+    /// lotes no liquidados (el nominal CONGELADO de cada compra, RN-13/D-13). Es lo que se
+    /// le devuelve al retirarse, y coincide con lo que su retiro baja del capital en
+    /// acciones del Pasivo aunque la asamblea haya cambiado el nominal después.
+    fn capital_activo_de_socio(&self, banco_id: &str, socio_id: &str) -> Result<f64, AppError>;
     /// Acciones vigentes de todo el Bankomunal.
     fn total_acciones(&self, banco_id: &str) -> Result<i64, AppError>;
     /// Acciones vigentes por socio, para la pantalla de listado y los reportes.
     fn acciones_por_socio(&self, banco_id: &str) -> Result<Vec<(String, i64)>, AppError>;
     /// Acciones y monto vendidos en un mes dado, para saber cuánto queda del cupo.
     fn vendido_en_mes(&self, banco_id: &str, mes: &str) -> Result<(i64, f64), AppError>;
+    /// Monto que un socio compró en un mes dado (RN-15: tope individual del cupo).
+    fn monto_de_socio_en_mes(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+        mes: &str,
+    ) -> Result<f64, AppError>;
+    /// Marca todos los lotes activos de un socio como liquidados (RF-28: retiro).
+    fn liquidar_lotes_de_socio(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+        fecha: &str,
+    ) -> Result<i64, AppError>;
+    /// RF-28 (liquidación PARCIAL): liquida `cantidad` acciones de un socio tomando sus
+    /// lotes del más antiguo al más nuevo (FIFO) y **partiendo un lote si hace falta**. El
+    /// socio sigue activo con las acciones que le quedan. Al partir un lote, sus devengos
+    /// (`pago_ganancia`) se prorratean al trozo liquidado, para que el llamador salde sólo
+    /// esa parte según el aniversario (RN-10). Baja únicamente el capital de los lotes;
+    /// quién paga o libera la ganancia lo decide el llamador con la lista devuelta.
+    /// El llamador debe validar que `cantidad` no supere las acciones LIBRES.
+    fn liquidar_acciones_parcial(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+        cantidad: i64,
+        fecha: &str,
+    ) -> Result<Vec<LoteLiquidado>, AppError>;
+}
+
+/// Un trozo de acciones que quedó liquidado en una venta parcial (RF-28). `lote_id` es el
+/// lote —o el nuevo trozo, si el original se partió— ya marcado como liquidado, con sus
+/// devengos prorrateados, listo para que el Cierre pague (si cumplió el año) o libere su
+/// ganancia (RN-10).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoteLiquidado {
+    pub lote_id: String,
+    pub mes_compra: String,
+    pub cantidad: i64,
+    /// Capital liquidado = acciones × nominal congelado del lote.
+    pub capital: f64,
 }
 
 /// % de colocación de crédito de los meses ya cerrados, insumo del PPCFC (RN-09).

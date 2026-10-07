@@ -14,6 +14,7 @@ use super::domain::{Beneficiario, DatosSocio, Protegido, Socio};
 #[derive(Debug, Clone, Serialize)]
 pub struct SocioResumenDto {
     pub id: String,
+    pub numero: i64,
     pub cedula: String,
     pub nombre_completo: String,
     pub celular: String,
@@ -25,6 +26,7 @@ impl From<&Socio> for SocioResumenDto {
     fn from(s: &Socio) -> Self {
         Self {
             id: s.id.clone(),
+            numero: s.numero,
             cedula: s.cedula.clone(),
             nombre_completo: s.nombre_completo(),
             celular: s.celular.clone(),
@@ -38,6 +40,7 @@ impl From<&Socio> for SocioResumenDto {
 #[derive(Debug, Clone, Serialize)]
 pub struct SocioDto {
     pub id: String,
+    pub numero: i64,
     pub cedula: String,
     pub nombres: String,
     pub apellidos: String,
@@ -57,6 +60,7 @@ impl From<Socio> for SocioDto {
     fn from(s: Socio) -> Self {
         Self {
             id: s.id,
+            numero: s.numero,
             cedula: s.cedula,
             nombres: s.nombres,
             apellidos: s.apellidos,

@@ -45,4 +45,6 @@ export interface DatosGenerales {
   numero_acciones_vendidas: number;
   saldo_fondo_gastos: number;
   saldo_fondo_incobrables: number;
+  socios_activos: number;
+  creditos_vigentes: number;
 }

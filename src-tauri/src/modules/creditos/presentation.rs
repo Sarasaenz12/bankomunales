@@ -6,7 +6,7 @@ use crate::state::AppState;
 
 use super::domain::{
     Credito, CuotaPlaneada, DecisionSolicitud, EstadoSolicitud, NuevaSolicitud, NuevoDesembolso,
-    SolicitudCredito, TablaCredito,
+    NuevoRefinanciamiento, SolicitudCredito, TablaCredito,
 };
 
 /// DTO de una cuota calculada (RF-46/RF-61). Idéntico a `CuotaPlaneada` del dominio,
@@ -91,7 +91,11 @@ impl From<SolicitudCredito> for SolicitudDto {
             observacion: s.observacion,
             fecha_decision: s.fecha_decision,
             decidida_por: s.decidida_por,
-            garantias: s.garantias.into_iter().map(GarantiaSolicitudDto::from).collect(),
+            garantias: s
+                .garantias
+                .into_iter()
+                .map(GarantiaSolicitudDto::from)
+                .collect(),
         }
     }
 }
@@ -153,7 +157,11 @@ impl From<Credito> for CreditoDto {
             frecuencia_pago: c.frecuencia_pago,
             fecha_vencimiento: c.fecha_vencimiento,
             solicitud_id: c.solicitud_id,
-            garantias: c.garantias.into_iter().map(GarantiaCreditoDto::from).collect(),
+            garantias: c
+                .garantias
+                .into_iter()
+                .map(GarantiaCreditoDto::from)
+                .collect(),
         }
     }
 }
@@ -184,7 +192,10 @@ pub fn previsualizar_tabla_credito(
     plazo: i64,
 ) -> Result<TablaCreditoDto, AppError> {
     let banco_id = state.banco_actual_id()?;
-    state.creditos.previsualizar_tabla(&banco_id, monto, plazo).map(TablaCreditoDto::from)
+    state
+        .creditos
+        .previsualizar_tabla(&banco_id, monto, plazo)
+        .map(TablaCreditoDto::from)
 }
 
 /// RF-43..RF-49 (CU-08): registrar una solicitud de crédito.
@@ -194,7 +205,10 @@ pub fn registrar_solicitud(
     solicitud: NuevaSolicitud,
 ) -> Result<SolicitudDto, AppError> {
     let banco_id = state.banco_actual_id()?;
-    state.creditos.registrar_solicitud(&banco_id, solicitud).map(SolicitudDto::from)
+    state
+        .creditos
+        .registrar_solicitud(&banco_id, solicitud)
+        .map(SolicitudDto::from)
 }
 
 /// RF-50/RF-51 (CU-08): decisión de la Junta sobre una solicitud.
@@ -204,7 +218,10 @@ pub fn decidir_solicitud(
     decision: DecisionSolicitud,
 ) -> Result<SolicitudDto, AppError> {
     let banco_id = state.banco_actual_id()?;
-    state.creditos.decidir_solicitud(&banco_id, decision).map(SolicitudDto::from)
+    state
+        .creditos
+        .decidir_solicitud(&banco_id, decision)
+        .map(SolicitudDto::from)
 }
 
 /// RF-52 (CU-08): listado de solicitudes, opcionalmente por estado.
@@ -241,20 +258,69 @@ pub fn previsualizar_desembolso(
     plazo: i64,
 ) -> Result<TablaCreditoDto, AppError> {
     let banco_id = state.banco_actual_id()?;
-    state.creditos.previsualizar_desembolso(&banco_id, monto, plazo).map(TablaCreditoDto::from)
+    state
+        .creditos
+        .previsualizar_desembolso(&banco_id, monto, plazo)
+        .map(TablaCreditoDto::from)
 }
 
 /// RF-52: consulta el crédito desembolsado de una solicitud (para "Ver crédito").
 #[tauri::command]
 pub fn buscar_credito_por_solicitud(
     state: State<'_, AppState>,
-    solicitudId: String,
+    solicitud_id: String,
 ) -> Result<Option<CreditoDto>, AppError> {
     let banco_id = state.banco_actual_id()?;
     state
         .creditos
-        .buscar_credito_por_solicitud(&banco_id, &solicitudId)
+        .buscar_credito_por_solicitud(&banco_id, &solicitud_id)
         .map(|c| c.map(CreditoDto::from))
+}
+
+/// Vista previa del próximo número de crédito (para la pantalla de Desembolso).
+#[tauri::command]
+pub fn siguiente_numero_credito(state: State<'_, AppState>) -> Result<String, AppError> {
+    let banco_id = state.banco_actual_id()?;
+    state.creditos.siguiente_numero(&banco_id)
+}
+
+/// Lista todos los créditos del Bankomunal (para buscar/autocompletar en Pago,
+/// Refinanciamiento, etc.).
+#[tauri::command]
+pub fn listar_creditos(state: State<'_, AppState>) -> Result<Vec<CreditoDto>, AppError> {
+    let banco_id = state.banco_actual_id()?;
+    state
+        .creditos
+        .listar_creditos(&banco_id)
+        .map(|v| v.into_iter().map(CreditoDto::from).collect())
+}
+
+/// RF-19: créditos en los que el socio es titular (deudor), para la pestaña
+/// "Historial de Créditos" del detalle del socio.
+#[tauri::command]
+pub fn creditos_de_socio(
+    state: State<'_, AppState>,
+    socio_id: String,
+) -> Result<Vec<CreditoDto>, AppError> {
+    let banco_id = state.banco_actual_id()?;
+    state
+        .creditos
+        .creditos_de_socio(&banco_id, &socio_id)
+        .map(|v| v.into_iter().map(CreditoDto::from).collect())
+}
+
+/// RF-19: créditos de terceros que el socio avala como fiador (RF-48, RN-04),
+/// para la pestaña "Créditos que avala" del detalle del socio.
+#[tauri::command]
+pub fn creditos_que_avala_socio(
+    state: State<'_, AppState>,
+    socio_id: String,
+) -> Result<Vec<CreditoDto>, AppError> {
+    let banco_id = state.banco_actual_id()?;
+    state
+        .creditos
+        .creditos_que_avala(&banco_id, &socio_id)
+        .map(|v| v.into_iter().map(CreditoDto::from).collect())
 }
 
 /// RF-53..RF-62 (CU-09): desembolsar el crédito y asentarlo en caja (CON).
@@ -264,5 +330,21 @@ pub fn registrar_desembolso(
     desembolso: NuevoDesembolso,
 ) -> Result<CreditoDto, AppError> {
     let banco_id = state.banco_actual_id()?;
-    state.creditos.registrar_desembolso(&banco_id, desembolso).map(CreditoDto::from)
+    state
+        .creditos
+        .registrar_desembolso(&banco_id, desembolso)
+        .map(CreditoDto::from)
+}
+
+/// RF-77..RF-82 (CU-12): Refinanciar un crédito y crear uno nuevo (COR).
+#[tauri::command]
+pub fn registrar_refinanciamiento(
+    state: State<'_, AppState>,
+    refinanciamiento: NuevoRefinanciamiento,
+) -> Result<CreditoDto, AppError> {
+    let banco_id = state.banco_actual_id()?;
+    state
+        .creditos
+        .registrar_refinanciamiento(&banco_id, refinanciamiento)
+        .map(CreditoDto::from)
 }

@@ -32,7 +32,8 @@ fn fila_a_solicitud(row: &rusqlite::Row) -> rusqlite::Result<SolicitudCredito> {
         fecha_solicitud: row.get(2)?,
         monto_solicitado: row.get(3)?,
         plazo_cuotas: row.get(4)?,
-        destino: DestinoCredito::desde_str(&row.get::<_, String>(5)?).unwrap_or(DestinoCredito::Otros),
+        destino: DestinoCredito::desde_str(&row.get::<_, String>(5)?)
+            .unwrap_or(DestinoCredito::Otros),
         total_ingresos: row.get(6)?,
         total_egresos: row.get(7)?,
         capacidad_pago: row.get(8)?,
@@ -153,7 +154,11 @@ impl SolicitudPort for SqliteSolicitudes {
         Ok(())
     }
 
-    fn buscar_por_id(&self, banco_id: &str, id: &str) -> Result<Option<SolicitudCredito>, AppError> {
+    fn buscar_por_id(
+        &self,
+        banco_id: &str,
+        id: &str,
+    ) -> Result<Option<SolicitudCredito>, AppError> {
         let conn = self.db.open_banco_db(banco_id)?;
         let mut stmt = conn.prepare(&format!("{SELECT_SOLICITUD} WHERE id = ?1"))?;
         let mut rows = stmt.query(params![id])?;
@@ -174,7 +179,9 @@ impl SolicitudPort for SqliteSolicitudes {
     ) -> Result<Vec<SolicitudCredito>, AppError> {
         let conn = self.db.open_banco_db(banco_id)?;
         let mut stmt = match estado {
-            Some(_e) => conn.prepare(&format!("{SELECT_SOLICITUD} WHERE estado = ?1 ORDER BY fecha_solicitud DESC"))?,
+            Some(_e) => conn.prepare(&format!(
+                "{SELECT_SOLICITUD} WHERE estado = ?1 ORDER BY fecha_solicitud DESC"
+            ))?,
             None => conn.prepare(&format!("{SELECT_SOLICITUD} ORDER BY fecha_solicitud DESC"))?,
         };
         let rows = match estado {
@@ -200,7 +207,13 @@ fn insertar_garantias_solicitud(
             "INSERT INTO garantia_solicitud
              (id, solicitud_id, socio_id, rol, acciones_comprometidas)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![g.id, g.solicitud_id, g.socio_id, g.rol.as_str(), g.acciones_comprometidas],
+            params![
+                g.id,
+                g.solicitud_id,
+                g.socio_id,
+                g.rol.as_str(),
+                g.acciones_comprometidas
+            ],
         )?;
     }
     Ok(())
@@ -227,7 +240,8 @@ fn fila_a_credito(row: &rusqlite::Row) -> rusqlite::Result<Credito> {
         plazo_cuotas: row.get(5)?,
         cuota_actual: row.get(6)?,
         saldo_pendiente: row.get(7)?,
-        destino: DestinoCredito::desde_str(&row.get::<_, String>(8)?).unwrap_or(DestinoCredito::Otros),
+        destino: DestinoCredito::desde_str(&row.get::<_, String>(8)?)
+            .unwrap_or(DestinoCredito::Otros),
         estatus: EstadoCredito::desde_str(&row.get::<_, String>(9)?),
         fecha_solicitud: row.get(10)?,
         fecha_desembolso: row.get(11)?,
@@ -325,7 +339,13 @@ impl CreditoPort for SqliteCreditos {
                 "INSERT INTO garantia_credito
                  (id, credito_id, socio_id, rol, acciones_comprometidas)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![g.id, g.credito_id, g.socio_id, g.rol.as_str(), g.acciones_comprometidas],
+                params![
+                    g.id,
+                    g.credito_id,
+                    g.socio_id,
+                    g.rol.as_str(),
+                    g.acciones_comprometidas
+                ],
             )?;
         }
 
@@ -363,6 +383,154 @@ impl CreditoPort for SqliteCreditos {
             }
             None => Ok(None),
         }
+    }
+
+    fn actualizar_estatus(
+        &self,
+        banco_id: &str,
+        credito_id: &str,
+        estatus: &str,
+    ) -> Result<(), AppError> {
+        let conn = self.db.open_banco_db(banco_id)?;
+        conn.execute(
+            "UPDATE credito SET estatus = ?2 WHERE id = ?1",
+            rusqlite::params![credito_id, estatus],
+        )?;
+        Ok(())
+    }
+
+    fn saldar_por_refinanciamiento(
+        &self,
+        banco_id: &str,
+        credito_id: &str,
+    ) -> Result<(), AppError> {
+        let conn = self.db.open_banco_db(banco_id)?;
+        conn.execute(
+            "UPDATE credito SET estatus = 'REFINANCIADO', saldo_pendiente = 0 WHERE id = ?1",
+            rusqlite::params![credito_id],
+        )?;
+        Ok(())
+    }
+
+    fn abonar_capital(
+        &self,
+        banco_id: &str,
+        credito_id: &str,
+        monto: f64,
+    ) -> Result<f64, AppError> {
+        let mut conn = self.db.open_banco_db(banco_id)?;
+        let tx = conn.transaction()?;
+
+        let saldo: f64 = tx.query_row(
+            "SELECT saldo_pendiente FROM credito WHERE id = ?1",
+            params![credito_id],
+            |r| r.get(0),
+        )?;
+        // El abono no puede pasar del saldo pendiente (el excedente lo maneja el llamador).
+        let abono = monto.round().min(saldo).max(0.0);
+        let nuevo_saldo = (saldo - abono).max(0.0);
+
+        // Baja el capital pendiente de las cuotas no pagadas desde la última hacia atrás,
+        // de modo que el cronograma no vuelva a cobrar el capital ya abonado. Sólo toca el
+        // capital: el interés programado de cada cuota sigue igual (no se condona por abonar).
+        let cuotas: Vec<(String, f64, f64)> = {
+            let mut stmt = tx.prepare(
+                "SELECT id, capital, capital_pagado FROM cuota
+                 WHERE credito_id = ?1 AND pagada = 0 ORDER BY numero DESC",
+            )?;
+            let rows = stmt.query_map(params![credito_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?;
+            let mut v = Vec::new();
+            for c in rows {
+                v.push(c?);
+            }
+            v
+        };
+        let mut restante = abono;
+        for (id, capital, capital_pagado) in cuotas {
+            if restante <= 0.0 {
+                break;
+            }
+            let pendiente = (capital - capital_pagado).max(0.0);
+            let take = restante.min(pendiente);
+            if take <= 0.0 {
+                continue;
+            }
+            tx.execute(
+                "UPDATE cuota SET capital_pagado = capital_pagado + ?2 WHERE id = ?1",
+                params![id, take],
+            )?;
+            restante -= take;
+        }
+
+        let estatus = if nuevo_saldo <= 0.01 { "PAGADO" } else { "VIGENTE" };
+        tx.execute(
+            "UPDATE credito SET saldo_pendiente = ?2, estatus = ?3 WHERE id = ?1",
+            params![credito_id, nuevo_saldo, estatus],
+        )?;
+
+        tx.commit()?;
+        Ok(nuevo_saldo)
+    }
+
+    fn eliminar(&self, banco_id: &str, credito_id: &str) -> Result<(), AppError> {
+        let mut conn = self.db.open_banco_db(banco_id)?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM cuota WHERE credito_id = ?1", params![credito_id])?;
+        tx.execute("DELETE FROM garantia_credito WHERE credito_id = ?1", params![credito_id])?;
+        tx.execute("DELETE FROM credito WHERE id = ?1", params![credito_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn interes_pendiente(
+        &self,
+        banco_id: &str,
+        credito_id: &str,
+        fecha: &str,
+    ) -> Result<(f64, f64), AppError> {
+        use crate::modules::deuda::domain::{dias_atraso, mora_de_cuota};
+
+        let tasa_mora = SqliteConfiguracion::new(self.db.clone())
+            .obtener(banco_id)?
+            .tasa_interes_mora;
+
+        let conn = self.db.open_banco_db(banco_id)?;
+        let mut stmt = conn.prepare(
+            "SELECT fecha_vencimiento, valor_total, interes, interes_pagado, mora_pagada, pagada
+             FROM cuota WHERE credito_id = ?1",
+        )?;
+        let filas = stmt.query_map(params![credito_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, f64>(1)?,
+                r.get::<_, f64>(2)?,
+                r.get::<_, f64>(3)?,
+                r.get::<_, f64>(4)?,
+                r.get::<_, i64>(5)?,
+            ))
+        })?;
+
+        let mut ordinario = 0.0;
+        let mut mora = 0.0;
+        for fila in filas {
+            let (venc, valor_total, interes, interes_pagado, mora_pagada, pagada) = fila?;
+            if pagada != 0 {
+                continue;
+            }
+            // Sólo el interés ya DEVENGADO (cuotas cuyo vencimiento ya pasó): el interés de
+            // las cuotas futuras no se debe al refinanciar —se cancela con el crédito viejo—
+            // y reconocerlo sería cobrar interés no ganado (y capitalizarlo, interés sobre
+            // interés). Las fechas ISO se comparan como texto.
+            if venc.as_str() <= fecha {
+                ordinario += (interes - interes_pagado).max(0.0);
+            }
+            // La mora sólo existe en cuotas vencidas; en las futuras `dias_atraso` es 0.
+            let dias = dias_atraso(&venc, fecha);
+            mora += (mora_de_cuota(valor_total, dias, tasa_mora) - mora_pagada).max(0.0);
+        }
+        Ok((ordinario.round(), mora.round()))
     }
 
     fn listar(&self, banco_id: &str) -> Result<Vec<Credito>, AppError> {
@@ -406,17 +574,6 @@ impl CreditoPort for SqliteCreditos {
             v.push(r?);
         }
         Ok(v)
-    }
-
-    /// RN-03 (RF-56): cuántos créditos VIGENTES tiene el socio.
-    fn contar_vigentes(&self, banco_id: &str, socio_id: &str) -> Result<i64, AppError> {
-        let conn = self.db.open_banco_db(banco_id)?;
-        let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM credito WHERE socio_id = ?1 AND estatus = 'VIGENTE'",
-            params![socio_id],
-            |r| r.get(0),
-        )?;
-        Ok(n)
     }
 }
 
@@ -495,6 +652,18 @@ impl SociosParaCreditoPort for SociosParaCreditoAdapter {
             None => Ok(None),
         }
     }
+
+    fn nombre_de_socio(&self, banco_id: &str, socio_id: &str) -> Result<Option<String>, AppError> {
+        let conn = self.db.open_banco_db(banco_id)?;
+        let mut stmt = conn.prepare(
+            "SELECT TRIM(nombres || ' ' || apellidos) FROM socio WHERE id = ?1",
+        )?;
+        let mut rows = stmt.query(params![socio_id])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(row.get(0)?)),
+            None => Ok(None),
+        }
+    }
 }
 
 /// Puente entre Créditos y el Libro de Ingresos y Egresos (RF-62).
@@ -529,6 +698,70 @@ impl LibroContablePort for LibroViaCaja {
                 fecha.to_string(),
                 monto,
                 descripcion.to_string(),
+                Some(socio_id.to_string()),
+                Some(credito_id.to_string()),
+            )
+            .map(|_| ())
+    }
+
+    fn registrar_refinanciamiento(
+        &self,
+        banco_id: &str,
+        fecha: &str,
+        monto: f64,
+        socio_id: &str,
+        credito_id: &str,
+        descripcion: &str,
+    ) -> Result<(), AppError> {
+        self.caja
+            .registrar_asiento_de_modulo(
+                banco_id,
+                CodigoOperacion::Refinanciamiento,
+                fecha.to_string(),
+                monto,
+                descripcion.to_string(),
+                Some(socio_id.to_string()),
+                Some(credito_id.to_string()),
+            )
+            .map(|_| ())
+    }
+
+    fn registrar_interes_ordinario(
+        &self,
+        banco_id: &str,
+        fecha: &str,
+        monto: f64,
+        socio_id: &str,
+        credito_id: &str,
+    ) -> Result<(), AppError> {
+        self.caja
+            .registrar_asiento_de_modulo(
+                banco_id,
+                CodigoOperacion::InteresOrdinario,
+                fecha.to_string(),
+                monto,
+                "Interés ordinario saldado al refinanciar".to_string(),
+                Some(socio_id.to_string()),
+                Some(credito_id.to_string()),
+            )
+            .map(|_| ())
+    }
+
+    fn registrar_mora(
+        &self,
+        banco_id: &str,
+        fecha: &str,
+        monto: f64,
+        socio_id: &str,
+        credito_id: &str,
+    ) -> Result<(), AppError> {
+        self.caja
+            .registrar_asiento_de_modulo(
+                banco_id,
+                CodigoOperacion::InteresMora,
+                fecha.to_string(),
+                monto,
+                "Mora saldada al refinanciar".to_string(),
                 Some(socio_id.to_string()),
                 Some(credito_id.to_string()),
             )

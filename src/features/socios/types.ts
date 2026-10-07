@@ -24,6 +24,7 @@ export interface Protegido {
 /** Fila del listado de socios: sólo lo que muestra la tabla. */
 export interface SocioResumen {
   id: string;
+  numero: number;
   cedula: string;
   nombre_completo: string;
   celular: string;
@@ -34,6 +35,7 @@ export interface SocioResumen {
 /** Detalle completo de un socio, para el formulario. */
 export interface Socio {
   id: string;
+  numero: number;
   cedula: string;
   nombres: string;
   apellidos: string;

@@ -28,26 +28,28 @@ impl From<Bankomunal> for BancoDto {
     }
 }
 
-fn to_dto(banco: Bankomunal) -> BancoDto {
-    BancoDto::from(banco)
-}
-
-/// RF-01/RF-02: login con contraseña genérica.
+/// RF-01/RF-02: login con contraseña genérica. Si es válida, marca la sesión como
+/// autenticada en el backend (las operaciones de entrada al Banco lo exigen).
 #[tauri::command]
 pub fn login(state: State<'_, AppState>, password: String) -> Result<bool, AppError> {
-    state.auth.login(&password)
+    let ok = state.auth.login(&password)?;
+    if ok {
+        state.marcar_autenticado();
+    }
+    Ok(ok)
 }
 
-/// RF-03: crear un nuevo Bankomunal con la clave de configuración inicial.
+/// RF-03: crear un nuevo Bankomunal. Requiere sesión iniciada.
 #[tauri::command]
 pub fn crear_bankomunal(
     state: State<'_, AppState>,
     nuevo: NuevoBankomunal,
 ) -> Result<BancoDto, AppError> {
+    state.exigir_autenticado()?;
     state
         .auth
         .crear_bankomunal(nuevo)
-        .map(to_dto)
+        .map(BancoDto::from)
 }
 
 /// RF-05: listar Bankomunales (pantalla de selección).
@@ -56,21 +58,22 @@ pub fn listar_bankomunales(state: State<'_, AppState>) -> Result<Vec<BancoDto>, 
     state
         .auth
         .listar_bankomunales()
-        .map(|v| v.into_iter().map(to_dto).collect())
+        .map(|v| v.into_iter().map(BancoDto::from).collect())
 }
 
 /// RF-06: si solo existe un Bankomunal, devolverlo para entrar directo.
 #[tauri::command]
 pub fn unico_bankomunal(state: State<'_, AppState>) -> Result<Option<BancoDto>, AppError> {
-    Ok(state.auth.unico_bankomunal()?.map(to_dto))
+    Ok(state.auth.unico_bankomunal()?.map(BancoDto::from))
 }
 
-/// RF-05/RF-06/RF-07: seleccionar el Bankomunal activo de la sesión.
+/// RF-05/RF-06/RF-07: seleccionar el Bankomunal activo de la sesión. Requiere sesión iniciada.
 #[tauri::command]
 pub fn seleccionar_bankomunal(
     state: State<'_, AppState>,
     id: String,
 ) -> Result<BancoDto, AppError> {
+    state.exigir_autenticado()?;
     let banco = state
         .auth
         .buscar_por_id(&id)?
@@ -78,18 +81,26 @@ pub fn seleccionar_bankomunal(
     // Abre el .db independiente del Banco para verificar que exista (RF-08).
     state.auth.abrir_banco_db(&banco.id)?;
     state.set_banco_seleccionado(Some(banco.id.clone()));
-    Ok(to_dto(banco))
+    Ok(BancoDto::from(banco))
 }
 
-/// RF-07: volver a la pantalla de selección (sin cerrar la app).
+/// RF-07: volver a la pantalla de selección (sin cerrar la app). La sesión sigue
+/// iniciada: cambiar de banco no vuelve a pedir la contraseña (RF-01/RF-02).
 #[tauri::command]
 pub fn volver_a_seleccion(state: State<'_, AppState>) -> Result<(), AppError> {
     state.set_banco_seleccionado(None);
     Ok(())
 }
 
+/// Indica si esta sesión ya inició sesión con la contraseña. La pantalla de selección la
+/// consulta para no volver a pedir la contraseña al cambiar de banco.
+#[tauri::command]
+pub fn sesion_iniciada(state: State<'_, AppState>) -> Result<bool, AppError> {
+    Ok(state.esta_autenticado())
+}
+
 /// Devuelve el Bankomunal seleccionado en la sesión, si lo hay.
 #[tauri::command]
 pub fn banco_seleccionado(state: State<'_, AppState>) -> Result<Option<BancoDto>, AppError> {
-    Ok(state.banco_seleccionado_entity()?.map(to_dto))
+    Ok(state.banco_seleccionado_entity()?.map(BancoDto::from))
 }

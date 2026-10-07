@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authService } from './authService';
 import { Bankomunal } from '../../core/types';
-import { Building2, Plus, ArrowRight } from 'lucide-react';
+import { MONEDAS } from '../../core/lib/monedas';
 
 export function AuthPage() {
     const [password, setPassword] = useState('');
@@ -17,9 +17,14 @@ export function AuthPage() {
     const navigate = useNavigate();
 
     useEffect(() => {
-        // Check if there is already an active bank selected in the backend session
+        // Si ya hay un banco activo, entrar directo. Si no, pero la sesión YA inició
+        // sesión (p. ej. tras "Cambiar de banco"), saltar la contraseña y mostrar la
+        // selección: la contraseña se pide una sola vez por sesión (RF-01/RF-02).
         authService.bancoSeleccionado().then(bank => {
-            if (bank) navigate('/app/dashboard');
+            if (bank) { navigate('/app/dashboard'); return; }
+            authService.sesionIniciada().then(ok => {
+                if (ok) { setIsAuthenticated(true); loadBanks(); }
+            }).catch(() => { });
         }).catch(() => { });
     }, [navigate]);
 
@@ -41,14 +46,17 @@ export function AuthPage() {
 
     const loadBanks = async () => {
         try {
+            // RF-06: con un único Bankomunal se entra directo (el backend es la fuente de verdad).
+            const unico = await authService.unicoBankomunal();
+            if (unico) {
+                await handleSelectBank(unico.id);
+                return;
+            }
             const bankList = await authService.listarBankomunales();
             if (bankList.length === 0) {
-                setShowCreate(true);
-            } else if (bankList.length === 1) {
-                await authService.seleccionarBankomunal(bankList[0].id);
-                navigate('/app/dashboard');
+                setShowCreate(true); // RF-03: sin bancos, arranca el flujo de creación.
             } else {
-                setBanks(bankList);
+                setBanks(bankList); // RF-05: dos o más → pantalla de selección.
             }
         } catch (err: any) {
             setError(err?.toString() || 'Error al cargar los Bankomunales');
@@ -67,10 +75,16 @@ export function AuthPage() {
     const handleCreateBank = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
-        if (!newBank.nombre) return setError('El nombre es obligatorio');
+        // El backend normaliza y valida de forma autoritativa (trim, moneda por defecto,
+        // unicidad). Aquí sólo un chequeo amable para no enviar un nombre en blanco.
+        if (!newBank.nombre.trim()) return setError('El nombre es obligatorio');
 
         try {
-            const bank = await authService.crearBankomunal(newBank);
+            const bank = await authService.crearBankomunal({
+                nombre: newBank.nombre.trim(),
+                ubicacion: newBank.ubicacion.trim(),
+                moneda: newBank.moneda.trim() || 'COP',
+            });
             await authService.seleccionarBankomunal(bank.id);
             navigate('/app/dashboard');
         } catch (err: any) {
@@ -81,25 +95,23 @@ export function AuthPage() {
     if (!isAuthenticated) {
         return (
             <div className="auth-container">
-                <div className="card">
-                    <div className="text-center mb-4">
-                        <Building2 size={48} color="var(--primary-color)" />
-                    </div>
-                    <h1 className="card-title">Acceso Bankomunales</h1>
+                <div className="auth-card">
+                    <h1 className="auth-title">Bankomunales</h1>
+                    <p className="auth-sub">Administración de Bancos Comunitarios</p>
                     <form onSubmit={handleLogin}>
                         <div className="form-group">
-                            <label className="form-label">Contraseña de acceso</label>
+                            <label className="form-label">Contraseña</label>
                             <input
                                 type="password"
                                 className="form-input"
                                 value={password}
                                 onChange={e => setPassword(e.target.value)}
-                                placeholder="Ingresa la clave genérica"
+                                placeholder="Ingrese la contraseña"
                                 autoFocus
                             />
                         </div>
-                        {error && <div className="error-message">{error}</div>}
-                        <button type="submit" className="btn btn-primary mt-4">Entrar</button>
+                        {error && <div className="error-message mb-4">{error}</div>}
+                        <button type="submit" className="btn btn-primary">Ingresar</button>
                     </form>
                 </div>
             </div>
@@ -109,28 +121,32 @@ export function AuthPage() {
     if (showCreate) {
         return (
             <div className="auth-container">
-                <div className="card">
-                    <h2 className="card-title">Crear Nuevo Bankomunal</h2>
-                    <p className="text-muted text-sm text-center mb-4">Configura el primer Bankomunal en este equipo.</p>
+                <div className="auth-card">
+                    <h1 className="auth-title">Nuevo Bankomunal</h1>
+                    <p className="auth-sub">Registra un Bankomunal en este equipo</p>
 
                     <form onSubmit={handleCreateBank}>
                         <div className="form-group">
                             <label className="form-label">Nombre del Bankomunal</label>
-                            <input type="text" className="form-input" value={newBank.nombre} onChange={e => setNewBank({ ...newBank, nombre: e.target.value })} placeholder="Ej. Banco Pijao" />
+                            <input type="text" className="form-input" value={newBank.nombre} onChange={e => setNewBank({ ...newBank, nombre: e.target.value })} placeholder="Ej. Banco Comunal La Esperanza" />
                         </div>
                         <div className="form-group">
                             <label className="form-label">Ubicación</label>
-                            <input type="text" className="form-input" value={newBank.ubicacion} onChange={e => setNewBank({ ...newBank, ubicacion: e.target.value })} placeholder="Ciudad, Barrio..." />
+                            <input type="text" className="form-input" value={newBank.ubicacion} onChange={e => setNewBank({ ...newBank, ubicacion: e.target.value })} placeholder="Ciudad, País" />
                         </div>
                         <div className="form-group">
                             <label className="form-label">Moneda</label>
-                            <input type="text" className="form-input" value={newBank.moneda} onChange={e => setNewBank({ ...newBank, moneda: e.target.value })} placeholder="COP" />
+                            <select className="form-input" value={newBank.moneda} onChange={e => setNewBank({ ...newBank, moneda: e.target.value })}>
+                                {MONEDAS.map(m => (
+                                    <option key={m.codigo} value={m.codigo}>{m.etiqueta}</option>
+                                ))}
+                            </select>
                         </div>
 
-                        {error && <div className="error-message">{error}</div>}
-                        <div className="form-group mt-4" style={{ display: 'flex', gap: '1rem' }}>
+                        {error && <div className="error-message mb-4">{error}</div>}
+                        <div className="form-group" style={{ display: 'flex', gap: '1rem', marginBottom: 0 }}>
                             {banks.length > 0 && <button type="button" className="btn btn-secondary" onClick={() => setShowCreate(false)}>Cancelar</button>}
-                            <button type="submit" className="btn btn-primary">Guardar e Ingresar</button>
+                            <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Guardar e ingresar</button>
                         </div>
                     </form>
                 </div>
@@ -140,25 +156,27 @@ export function AuthPage() {
 
     return (
         <div className="auth-container">
-            <div className="card">
-                <h2 className="card-title">Seleccionar Bankomunal</h2>
+            <div className="select-wrap">
+                <h1 className="auth-title">Bankomunales</h1>
+                <p className="auth-sub">Seleccione un Bankomunal para trabajar</p>
 
-                <div className="bank-list">
-                    {banks.map(b => (
-                        <div key={b.id} className="bank-item" onClick={() => handleSelectBank(b.id)}>
-                            <div>
-                                <strong>{b.nombre}</strong>
-                                <div className="text-sm text-muted">{b.ubicacion}</div>
+                {error && <div className="error-message mb-4">{error}</div>}
+
+                <div className="bank-grid">
+                    {banks.map((b, i) => (
+                        <div key={b.id} className="bank-card" onClick={() => handleSelectBank(b.id)}>
+                            <div className="bank-card-name">{b.nombre}</div>
+                            <div className="bank-card-meta">
+                                Código: BK-{String(i + 1).padStart(3, '0')}
+                                {b.ubicacion ? ` · ${b.ubicacion}` : ''}
                             </div>
-                            <ArrowRight size={20} color="var(--primary-color)" />
                         </div>
                     ))}
                 </div>
 
-                <button className="btn btn-secondary" onClick={() => setShowCreate(true)}>
-                    <Plus size={18} style={{ marginRight: '8px' }} /> Agregar Nuevo Bankomunal
+                <button className="create-bank-btn" onClick={() => setShowCreate(true)}>
+                    + Crear otro Bankomunal
                 </button>
-                {error && <div className="error-message mt-4">{error}</div>}
             </div>
         </div>
     );

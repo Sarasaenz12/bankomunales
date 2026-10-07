@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use super::error::AppError;
 
 /// Migraciones del `app.db`, en orden. El índice + 1 es el `user_version` que deja aplicada.
-const APP_MIGRATIONS: &[&str] = &[include_str!("sql/app_v1.sql")];
+const APP_MIGRATIONS: &[&str] = &[
+    include_str!("sql/app_v1.sql"),
+    include_str!("sql/app_v2.sql"),
+];
 
 /// Migraciones del `.db` de un Bankomunal, en orden.
 /// Nunca se edita un script ya publicado: los cambios de esquema entran como uno nuevo
@@ -16,6 +19,8 @@ const BANCO_MIGRATIONS: &[&str] = &[
     include_str!("sql/banco_v4.sql"),
     include_str!("sql/banco_v5.sql"),
     include_str!("sql/banco_v6.sql"),
+    include_str!("sql/banco_v7.sql"),
+    include_str!("sql/banco_v8.sql"),
 ];
 
 /// Gestiona las rutas y la apertura de los archivos `.db`.
@@ -104,7 +109,7 @@ mod tests {
         let mgr = DbManager::new(dir.clone());
         let conn = mgr.open_app_db().unwrap();
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, APP_MIGRATIONS.len() as i64);
         // Tablas del catálogo y settings existen.
         let t: i64 = conn
             .query_row(
@@ -357,6 +362,27 @@ mod tests {
             [],
         );
         assert!(duplicado.is_err(), "UNIQUE(lote, reparto) debe impedir el duplicado");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// D-20: el Cierre de Mes guarda los Otros Egresos restados en cada reparto.
+    #[test]
+    fn banco_db_v7_guarda_otros_egresos_del_reparto() {
+        let dir = temp_dir();
+        let mgr = DbManager::new(dir.clone());
+        let id = Uuid::new_v4().to_string();
+        let conn = mgr.open_banco_db(&id).unwrap();
+
+        let tiene: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('reparto_ganancias')
+                 WHERE name = 'otros_egresos'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tiene, 1);
 
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -21,16 +21,12 @@ pub struct NuevoBankomunal {
     pub moneda: String,
 }
 
-/// Valores por defecto de las claves de acceso a nivel aplicación.
-/// La clave de configuración inicial está documentada en el manual del usuario
-/// (decisión del cliente); la contraseña genérica de acceso comparte el mismo valor
-/// por defecto y debe confirmarse con el cliente antes de producción.
-pub const DEFAULT_CLAVE_CONFIGURACION: &str = "admin2026";
+/// Contraseña genérica de acceso por defecto (primer uso). Es una decisión del cliente
+/// documentada en el manual y debe confirmarse antes de producción.
 pub const DEFAULT_PASSWORD_GENERICA: &str = "admin2026";
 
-/// Claves de configuración del app.db.
+/// Clave del app.db donde se guarda el hash de la contraseña de acceso.
 pub const SETTING_PASSWORD_HASH: &str = "password_hash";
-pub const SETTING_CLAVE_CONFIG_HASH: &str = "clave_config_hash";
 
 /// --- Puertos (hexagonal): contratos que implentará un adaptador SQLite. ---
 

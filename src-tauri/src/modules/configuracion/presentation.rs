@@ -34,7 +34,7 @@ pub fn actualizar_configuracion(
         .actualizar_configuracion(&banco_id, &configuracion, &nombre_quien_realiza, &motivo)
 }
 
-/// RF-114: consultar el historial completo de Auditoría.
+/// RF-114: consultar el historial completo de Auditoría del Bankomunal seleccionado.
 #[tauri::command]
 pub fn listar_auditoria(state: State<'_, AppState>) -> Result<Vec<EntradaAuditoria>, AppError> {
     let banco_id = state.banco_actual_id()?;

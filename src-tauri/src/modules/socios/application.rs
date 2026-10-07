@@ -5,9 +5,7 @@ use uuid::Uuid;
 
 use crate::core::error::AppError;
 
-use super::domain::{
-    DatosSocio, EstatusSocio, Socio, SocioPort, MAX_PROTEGIDOS, MAX_SOCIOS,
-};
+use super::domain::{DatosSocio, EstatusSocio, Socio, SocioPort, MAX_PROTEGIDOS, MAX_SOCIOS};
 
 /// Capa de Aplicación/Servicios del módulo de Socios.
 /// Orquesta los casos de uso CU-05 y CU-06 (RF-15 a RF-21) usando únicamente el puerto
@@ -44,12 +42,16 @@ impl SocioService {
         if activos >= MAX_SOCIOS {
             return Err(AppError::OperacionNoPermitida(format!(
                 "El Bankomunal ya tiene {activos} socios activos y el máximo permitido es \
-                 {MAX_SOCIOS} (RN-01)"
+                 {MAX_SOCIOS}"
             )));
         }
 
+        // Nº de socio correlativo (MAX+1, sin reutilizar los de socios retirados).
+        let numero = self.socios.siguiente_numero(banco_id)?;
+
         let socio = Socio {
             id: Uuid::new_v4().to_string(),
+            numero,
             cedula: datos.cedula,
             nombres: datos.nombres,
             apellidos: datos.apellidos,
@@ -142,6 +144,35 @@ impl SocioService {
         Ok((activos, MAX_SOCIOS.saturating_sub(activos)))
     }
 
+    /// RF-37/RF-38: marca retirar socio y registra deuda incobrable si existe.
+    pub fn marcar_retiro(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+        estatus: EstatusSocio,
+        fecha_retiro: &str,
+        saldo_incobrable: f64,
+    ) -> Result<(), AppError> {
+        self.socios
+            .marcar_retiro(banco_id, socio_id, estatus, fecha_retiro, saldo_incobrable)
+    }
+
+    /// RF-73: lista a los socios que quedaron con deuda tras su retiro.
+    pub fn listar_retirados_con_deuda(&self, banco_id: &str) -> Result<Vec<Socio>, AppError> {
+        self.socios.listar_retirados_con_deuda(banco_id)
+    }
+
+    /// RF-74/RF-76: abona a la deuda de un socio retirado, cambiándolo a Deuda Saldada si cancela todo.
+    pub fn abonar_deuda_incobrable(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+        monto: f64,
+    ) -> Result<f64, AppError> {
+        self.socios
+            .abonar_deuda_incobrable(banco_id, socio_id, monto)
+    }
+
     /// Validaciones comunes a registrar y actualizar.
     ///
     /// Sólo se exigen los datos que identifican a la persona. Profesión, dirección,
@@ -183,7 +214,7 @@ impl SocioService {
         // RF-21: la planilla contempla hasta 2 protegidos.
         if datos.protegidos.len() > MAX_PROTEGIDOS {
             return Err(AppError::OperacionNoPermitida(format!(
-                "Sólo se pueden registrar hasta {MAX_PROTEGIDOS} protegidos por socio (RF-21)"
+                "Sólo se pueden registrar hasta {MAX_PROTEGIDOS} protegidos por socio"
             )));
         }
         for p in &datos.protegidos {
@@ -201,7 +232,7 @@ impl SocioService {
         if let Some(b) = &datos.beneficiario {
             if b.nombre.trim().is_empty() || b.cedula.trim().is_empty() {
                 return Err(AppError::OperacionNoPermitida(
-                    "El beneficiario en caso de muerte debe tener nombre y cédula (RF-20)".into(),
+                    "El beneficiario en caso de muerte debe tener nombre y cédula".into(),
                 ));
             }
             if !solo_digitos(&b.cedula) {
@@ -307,6 +338,24 @@ mod tests {
             beneficiario: None,
             protegidos: vec![],
         }
+    }
+
+    /// El Nº de socio es correlativo y no se reutiliza: si el socio 1 se retira, el nuevo
+    /// socio toma el siguiente número (3), no el que quedó libre.
+    #[test]
+    fn el_numero_de_socio_es_correlativo_y_no_se_reutiliza() {
+        let (svc, banco) = test_service();
+        let uno = svc.registrar(&banco, datos("111", "Ana")).unwrap();
+        let dos = svc.registrar(&banco, datos("222", "Beto")).unwrap();
+        assert_eq!(uno.numero, 1);
+        assert_eq!(dos.numero, 2);
+
+        // Se retira el socio 1: conserva su fila (y su número).
+        svc.marcar_retiro(&banco, &uno.id, EstatusSocio::RetiradoVoluntario, "2026-09-01", 0.0)
+            .unwrap();
+
+        let tres = svc.registrar(&banco, datos("333", "Caro")).unwrap();
+        assert_eq!(tres.numero, 3, "no reutiliza el número del socio retirado");
     }
 
     #[test]
@@ -457,10 +506,16 @@ mod tests {
     #[test]
     fn registrar_acepta_correos_validos_y_tambien_vacio() {
         let (svc, banco) = test_service();
-        for (i, bueno) in ["ana@ejemplo.com", "a.b+c@sub.dominio.co", ""].iter().enumerate() {
+        for (i, bueno) in ["ana@ejemplo.com", "a.b+c@sub.dominio.co", ""]
+            .iter()
+            .enumerate()
+        {
             let mut d = datos(&format!("{i}"), "Ana");
             d.correo = (*bueno).into();
-            assert!(svc.registrar(&banco, d).is_ok(), "«{bueno}» debería aceptarse");
+            assert!(
+                svc.registrar(&banco, d).is_ok(),
+                "«{bueno}» debería aceptarse"
+            );
         }
     }
 
@@ -568,7 +623,9 @@ mod tests {
     fn actualizar_sin_cambiar_cedula_no_choca_consigo_mismo() {
         let (svc, banco) = test_service();
         let creado = svc.registrar(&banco, datos("123", "Ana")).unwrap();
-        assert!(svc.actualizar(&banco, &creado.id, datos("123", "Ana")).is_ok());
+        assert!(svc
+            .actualizar(&banco, &creado.id, datos("123", "Ana"))
+            .is_ok());
     }
 
     /// RF-18: tampoco al actualizar puede quedar la cédula de otro socio.
@@ -606,7 +663,11 @@ mod tests {
         svc.actualizar(&banco, &creado.id, d2).unwrap();
 
         let leido = svc.obtener(&banco, &creado.id).unwrap();
-        assert_eq!(leido.protegidos.len(), 1, "no deben acumularse los anteriores");
+        assert_eq!(
+            leido.protegidos.len(),
+            1,
+            "no deben acumularse los anteriores"
+        );
         assert_eq!(leido.protegidos[0].nombre, "Pedro");
     }
 
@@ -618,7 +679,8 @@ mod tests {
             AppError::SocioNoEncontrado
         ));
         assert!(matches!(
-            svc.actualizar(&banco, "no-existe", datos("1", "X")).unwrap_err(),
+            svc.actualizar(&banco, "no-existe", datos("1", "X"))
+                .unwrap_err(),
             AppError::SocioNoEncontrado
         ));
     }
@@ -652,6 +714,46 @@ mod tests {
 
     /// RF-08: dos Bankomunales del mismo computador no comparten socios, ni siquiera
     /// con la misma cédula.
+    /// El listado es un roster: no trae beneficiario ni protegidos aunque el socio los
+    /// tenga (el detalle completo se obtiene con `obtener`). Evita N+1 innecesario.
+    #[test]
+    fn el_listado_no_trae_allegados() {
+        let (svc, banco) = test_service();
+        let mut d = datos("123", "Ana");
+        d.beneficiario = Some(Beneficiario {
+            nombre: "Luis".into(),
+            cedula: "999".into(),
+            parentesco: None,
+        });
+        d.protegidos = vec![Protegido {
+            nombre: "Sara".into(),
+            cedula: "111".into(),
+            parentesco: "Hija".into(),
+            telefono: String::new(),
+        }];
+        let creado = svc.registrar(&banco, d).unwrap();
+
+        let lista = svc.listar(&banco).unwrap();
+        assert_eq!(lista.len(), 1);
+        assert!(lista[0].beneficiario.is_none(), "el roster no hidrata beneficiario");
+        assert!(lista[0].protegidos.is_empty(), "el roster no hidrata protegidos");
+
+        // Pero el detalle sí los conserva.
+        let detalle = svc.obtener(&banco, &creado.id).unwrap();
+        assert!(detalle.beneficiario.is_some());
+        assert_eq!(detalle.protegidos.len(), 1);
+    }
+
+    /// Retirar un socio inexistente es un error, no un no-op silencioso.
+    #[test]
+    fn marcar_retiro_de_socio_inexistente_falla() {
+        let (svc, banco) = test_service();
+        let err = svc
+            .marcar_retiro(&banco, "no-existe", EstatusSocio::RetiradoVoluntario, "2026-09-01", 0.0)
+            .unwrap_err();
+        assert!(matches!(err, AppError::SocioNoEncontrado));
+    }
+
     #[test]
     fn los_socios_no_se_mezclan_entre_bankomunales() {
         let dir = std::env::temp_dir().join(format!("bkn_socios_aisl_{}", Uuid::new_v4()));

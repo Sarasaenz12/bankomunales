@@ -8,8 +8,7 @@ use crate::core::error::AppError;
 
 use super::domain::{
     AppSettingsPort, BancoCatalogoPort, Bankomunal, NuevoBankomunal, PasswordHasherPort,
-    SETTING_CLAVE_CONFIG_HASH, SETTING_PASSWORD_HASH, DEFAULT_CLAVE_CONFIGURACION,
-    DEFAULT_PASSWORD_GENERICA,
+    DEFAULT_PASSWORD_GENERICA, SETTING_PASSWORD_HASH,
 };
 
 /// Capa de Aplicación/Servicios del módulo de Autenticación.
@@ -37,17 +36,12 @@ impl AuthService {
         }
     }
 
-    /// Inicialización de primer uso: crea el app.db y siembra las claves por defecto
-    /// (contraseña genérica y clave de configuración inicial) con su hash.
-    /// No sobrescribe valores ya existentes.
+    /// Inicialización de primer uso: crea el app.db y siembra el hash de la contraseña
+    /// genérica por defecto. No sobrescribe un hash ya existente.
     pub fn inicializar(&self) -> Result<(), AppError> {
         if self.settings.obtener(SETTING_PASSWORD_HASH)?.is_none() {
             let hash = self.hasher.hash(DEFAULT_PASSWORD_GENERICA)?;
             self.settings.guardar(SETTING_PASSWORD_HASH, &hash)?;
-        }
-        if self.settings.obtener(SETTING_CLAVE_CONFIG_HASH)?.is_none() {
-            let hash = self.hasher.hash(DEFAULT_CLAVE_CONFIGURACION)?;
-            self.settings.guardar(SETTING_CLAVE_CONFIG_HASH, &hash)?;
         }
         Ok(())
     }
@@ -62,20 +56,34 @@ impl AuthService {
     }
 
     // RF-03 / RF-04: crear un nuevo Bankomunal.
-    // - genera el id y crea el .db independiente del Banco
-    // - registra el Bankomunal en el catálogo y devuelve la entidad creada
+    // - normaliza los datos una sola vez (aquí, en el borde del dominio)
+    // - genera el id, registra el Bankomunal en el catálogo y crea su .db
+    // - devuelve la entidad creada ya normalizada
     pub fn crear_bankomunal(
         &self,
         nuevo: NuevoBankomunal,
     ) -> Result<Bankomunal, AppError> {
+        let nombre = nuevo.nombre.trim().to_string();
         // RF-04: rechaza creación con nombre vacío (sin datos no se crea el Banco).
-        if nuevo.nombre.trim().is_empty() {
+        if nombre.is_empty() {
             return Err(AppError::DatosIncompletos);
         }
-        // RF-04: el nombre no puede estar duplicado entre Bankomunales.
+        let moneda = {
+            let m = nuevo.moneda.trim();
+            if m.is_empty() { "COP".to_string() } else { m.to_uppercase() }
+        };
+        let normalizado = NuevoBankomunal {
+            nombre,
+            ubicacion: nuevo.ubicacion.trim().to_string(),
+            moneda,
+        };
+
+        // RF-04: el nombre no puede duplicarse (comparación sin distinción de mayúsculas).
+        // Pre-chequeo para dar un error amable; la unicidad real la garantiza el índice
+        // UNIQUE del catálogo, que cierra la condición de carrera.
         if self
             .catalogo
-            .buscar_por_nombre(&nuevo.nombre)?
+            .buscar_por_nombre(&normalizado.nombre)?
             .is_some()
         {
             return Err(AppError::NombreDuplicado);
@@ -83,7 +91,7 @@ impl AuthService {
 
         let id = Uuid::new_v4().to_string();
         let fecha_creacion = Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string();
-        self.catalogo.crear(&id, &fecha_creacion, &nuevo)
+        self.catalogo.crear(&id, &fecha_creacion, &normalizado)
     }
 
     /// RF-05 / RF-06: listar Bankomunales para la pantalla de selección.
@@ -241,6 +249,32 @@ mod tests {
         }
     }
 
+    /// RF-03/RF-05: un Bankomunal creado se devuelve con su id y conserva su ubicación y
+    /// moneda en el listado — los datos que la pantalla de detalle (`/app/bancos/:id`)
+    /// carga y muestra tras crearlo.
+    #[test]
+    fn el_bankomunal_creado_conserva_sus_datos_en_el_listado() {
+        let auth = test_services();
+        let creado = auth
+            .crear_bankomunal(NuevoBankomunal {
+                nombre: "Bankordillera".into(),
+                ubicacion: "Salento, Quindío".into(),
+                moneda: "USD".into(),
+            })
+            .unwrap();
+        assert!(!creado.id.is_empty(), "el banco creado debe traer su id");
+
+        let lista = auth.listar_bankomunales().unwrap();
+        let encontrado = lista
+            .iter()
+            .find(|b| b.id == creado.id)
+            .expect("el banco creado debe aparecer en el listado");
+        assert_eq!(encontrado.nombre, "Bankordillera");
+        assert_eq!(encontrado.ubicacion, "Salento, Quindío");
+        assert_eq!(encontrado.moneda, "USD");
+        assert!(!encontrado.fecha_creacion.is_empty(), "debe registrar la fecha de creación");
+    }
+
     #[test]
     fn solo_nombre_duplicado_no_se_crea() {
         let auth = test_services();
@@ -265,6 +299,54 @@ mod tests {
 
         // Ninguno se registró por duplicado: sigue habiendo un solo Banco.
         assert_eq!(auth.listar_bankomunales().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn nombre_duplicado_sin_distinguir_mayusculas_ni_espacios() {
+        let auth = test_services();
+        auth.crear_bankomunal(NuevoBankomunal {
+            nombre: "Pijao".into(),
+            ubicacion: "".into(),
+            moneda: "COP".into(),
+        })
+        .unwrap();
+
+        // Mismo nombre en otra caja y con espacios → sigue siendo duplicado (RF-04).
+        let err = auth
+            .crear_bankomunal(NuevoBankomunal {
+                nombre: "  pijao ".into(),
+                ubicacion: "".into(),
+                moneda: "cop".into(),
+            })
+            .unwrap_err();
+        assert!(matches!(err, AppError::NombreDuplicado));
+        assert_eq!(auth.listar_bankomunales().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn crear_normaliza_nombre_moneda_y_ubicacion() {
+        let auth = test_services();
+        let banco = auth
+            .crear_bankomunal(NuevoBankomunal {
+                nombre: "  Salento  ".into(),
+                ubicacion: "  Salento, Quindío  ".into(),
+                moneda: "  usd ".into(),
+            })
+            .unwrap();
+        // El nombre y la ubicación se recortan; la moneda se recorta y va en mayúsculas.
+        assert_eq!(banco.nombre, "Salento");
+        assert_eq!(banco.ubicacion, "Salento, Quindío");
+        assert_eq!(banco.moneda, "USD");
+
+        // Moneda vacía cae al valor por defecto.
+        let otro = auth
+            .crear_bankomunal(NuevoBankomunal {
+                nombre: "Filandia".into(),
+                ubicacion: "".into(),
+                moneda: "   ".into(),
+            })
+            .unwrap();
+        assert_eq!(otro.moneda, "COP");
     }
 
     #[test]

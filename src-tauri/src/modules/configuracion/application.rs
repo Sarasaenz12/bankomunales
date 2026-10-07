@@ -75,19 +75,19 @@ impl ConfigService {
         if !(0.0..=100.0).contains(&nueva.tope_reserva_incobrables_pct) {
             return Err(AppError::OperacionNoPermitida(
                 "El tope del Fondo de Reserva para Incobrables debe estar entre 0% y 100% \
-                 del capital en acciones (RN-08)"
+                 del capital en acciones"
                     .into(),
             ));
         }
         // RN-04: la garantía mínima combinada (socio + fiador) debe cubrir al menos el 40%.
         if nueva.pct_garantia_socio + nueva.pct_garantia_fiador < 40.0 {
             return Err(AppError::OperacionNoPermitida(
-                "La garantía mínima combinada (socio + fiador) debe ser al menos 40% (RN-04)".into(),
+                "La garantía mínima combinada (socio + fiador) debe ser al menos 40%".into(),
             ));
         }
         if nueva.valor_nominal <= 0.0 {
             return Err(AppError::OperacionNoPermitida(
-                "El valor nominal de la acción debe ser mayor a cero (RN-13)".into(),
+                "El valor nominal de la acción debe ser mayor a cero".into(),
             ));
         }
         // RN-09: los % autorizados a vender son proporciones del total de acciones, y el
@@ -99,14 +99,14 @@ impl ConfigService {
             if !(0.0..=100.0).contains(&valor) {
                 return Err(AppError::OperacionNoPermitida(format!(
                     "El % de acciones autorizado a vender en el {campo} del PPCFC debe \
-                     estar entre 0% y 100% (RN-09)"
+                     estar entre 0% y 100%"
                 )));
             }
         }
         if nueva.ppcfc_venta_rango2_pct < nueva.ppcfc_venta_rango1_pct {
             return Err(AppError::OperacionNoPermitida(
                 "El % autorizado a vender con el PPCFC en el tramo alto no puede ser menor \
-                 que el del tramo bajo (RN-09)"
+                 que el del tramo bajo"
                     .into(),
             ));
         }
@@ -115,7 +115,7 @@ impl ConfigService {
         if !(0.0..=100.0).contains(&nueva.tope_individual_mensual_pct) {
             return Err(AppError::OperacionNoPermitida(
                 "El tope individual mensual debe estar entre 0% y 100% del cupo autorizado \
-                 del mes (RN-15)"
+                 del mes"
                     .into(),
             ));
         }

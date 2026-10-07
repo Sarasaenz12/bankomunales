@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { creditosService, validarNuevaSolicitud, cumpleRn03, cumpleRn04Socio, cumpleRn04Fiadores, maximoRn03 } from './creditosService';
 import { ItemValidacion } from './ItemValidacion';
 import { TablaIngresosEgresos, FilaMonto } from './TablaIngresosEgresos';
 import { TablaAmortizacion } from './TablaAmortizacion';
 import { BuscadorSocio } from '../../core/components/BuscadorSocio';
 import { HOY } from '../../core/lib/dates';
-import { fmt } from '../../core/lib/format';
+import { fmt, fmtNum, parseNum } from '../../core/lib/format';
 import { Configuracion } from '../../core/types';
 import { SocioResumen } from '../socios/types';
 import {
@@ -19,8 +19,8 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
     const [fecha, setFecha] = useState(HOY());
     const [destino, setDestino] = useState<DestinoCredito | ''>('');
 
-    const [ingresos, setIngresos] = useState<FilaMonto[]>([]);
-    const [egresos, setEgresos] = useState<FilaMonto[]>([]);
+    const [ingresos, setIngresos] = useState<FilaMonto[]>([{ tipo: '', monto: '' }, { tipo: '', monto: '' }]);
+    const [egresos, setEgresos] = useState<FilaMonto[]>([{ tipo: '', monto: '' }, { tipo: '', monto: '' }]);
     const [monto, setMonto] = useState('');
     const [plazo, setPlazo] = useState('');
     const [tasa, setTasa] = useState('3');
@@ -36,6 +36,7 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [guardando, setGuardando] = useState(false);
+    const enviando = useRef(false);
 
     useEffect(() => {
         creditosService.listarSociosActivos()
@@ -73,9 +74,13 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
         return () => { vigente = false; };
     }, [monto, plazo]);
 
-    const valorNominal = config?.valor_nominal ?? 10000;
-    const pctSocio = config?.pct_garantia_socio ?? 20;
-    const pctFiador = config?.pct_garantia_fiador ?? 20;
+    // La configuración es imprescindible para validar RN-03/RN-04: hasta que cargue no
+    // se muestran los cálculos (nada de valores por defecto que puedan mentir).
+    if (!config) return <div className="empty-state">Cargando configuración…</div>;
+
+    const valorNominal = config.valor_nominal;
+    const pctSocio = config.pct_garantia_socio;
+    const pctFiador = config.pct_garantia_fiador;
 
     // RN-03 (RF-56): relación 1 a 5.
     const valorAcciones = accionesReales * valorNominal;
@@ -105,6 +110,7 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
     }
 
     function validar(): string {
+        if (!config) return 'La configuración del Bankomunal aún no ha cargado';
         return validarNuevaSolicitud({
             solicitante, monto: Number(monto), plazo: Number(plazo), destino,
             fiadores: fiadores(), accionesSolicitante: accionesReales,
@@ -112,9 +118,26 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
         }).mensaje;
     }
 
+    /** Deja el formulario en blanco tras registrar (para no reenviar lo mismo por error). */
+    function limpiarFormulario() {
+        setSolicitante(null);
+        setDestino('');
+        setIngresos([{ tipo: '', monto: '' }, { tipo: '', monto: '' }]);
+        setEgresos([{ tipo: '', monto: '' }, { tipo: '', monto: '' }]);
+        setMonto('');
+        setPlazo('');
+        setFiador1(null);
+        setFiador2(null);
+        setAccionesFiador1('');
+        setAccionesFiador2('');
+        setTabla(null);
+    }
+
     async function enviarParaAprobacion() {
+        if (enviando.current || guardando) return;
         const msg = validar();
         if (msg) { setError(msg); return; }
+        enviando.current = true;
         setError(''); setSuccess(''); setGuardando(true);
         try {
             const sol: NuevaSolicitud = {
@@ -129,17 +152,20 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
             const guardada = await creditosService.registrarSolicitud(sol);
             setSuccess(`Solicitud ${guardada.estado === 'PENDIENTE' ? 'enviada a la Junta' : 'registrada'}: ${
                 fmt(guardada.monto_solicitado, moneda)} a ${guardada.plazo_cuotas} cuotas.`);
-            setMonto(''); setPlazo(''); setTabla(null);
+            limpiarFormulario();
         } catch (err: any) {
             setError(err?.toString() ?? 'No se pudo registrar la solicitud');
         } finally {
+            enviando.current = false;
             setGuardando(false);
         }
     }
 
     async function registrarDirecto() {
+        if (enviando.current || guardando) return;
         const msg = validar();
         if (msg) { setError(msg); return; }
+        enviando.current = true;
         setError(''); setSuccess(''); setGuardando(true);
         try {
             const des: NuevoDesembolso = {
@@ -153,11 +179,77 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
             };
             const credito: Credito = await creditosService.registrarDesembolso(des);
             setSuccess(`Crédito Nº ${credito.numero} desembolsado por ${fmt(credito.monto_original, moneda)}.`);
-            setMonto(''); setPlazo(''); setTabla(null);
+            limpiarFormulario();
         } catch (err: any) {
             setError(err?.toString() ?? 'No se pudo registrar el desembolso');
         } finally {
+            enviando.current = false;
             setGuardando(false);
+        }
+    }
+
+    /** Imprime SÓLO la tabla de pagos, en un documento aparte (evita que salga el resto de
+     * la pantalla). Se arma el HTML de la tabla y se manda a imprimir desde un iframe oculto. */
+    function imprimirTabla() {
+        if (!tabla) return;
+        const esc = (s: string) =>
+            s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c] as string));
+
+        let saldo = Number(monto);
+        const filasHtml = tabla.cuotas.map(c => {
+            const saldoAntes = saldo;
+            saldo = Math.max(0, saldo - c.capital);
+            return `<tr><td>${c.numero}</td><td>${fmt(c.valor_total, moneda)}</td>` +
+                `<td>${fmt(c.capital, moneda)}</td><td>${fmt(c.interes, moneda)}</td>` +
+                `<td>${fmt(saldoAntes, moneda)}</td></tr>`;
+        }).join('');
+        const lineaSocio = solicitante
+            ? `<div>Solicitante: ${esc(solicitante.nombre_completo)} — ${esc(solicitante.cedula)}</div>`
+            : '';
+
+        const html = `<!doctype html><html lang="es"><head><meta charset="utf-8">` +
+            `<title>Tabla de pagos</title><style>` +
+            `body{font-family:system-ui,'Segoe UI',sans-serif;color:#042850;padding:24px;}` +
+            `h2{margin:0 0 6px;font-size:18px;}` +
+            `.meta{font-size:13px;color:#333;margin-bottom:16px;line-height:1.5;}` +
+            `table{width:100%;border-collapse:collapse;font-size:13px;}` +
+            `th,td{border:1px solid #bbb;padding:6px 10px;text-align:right;}` +
+            `th:first-child,td:first-child{text-align:left;}` +
+            `thead th{background:#eef2f7;}` +
+            `</style></head><body>` +
+            `<h2>Tabla de pagos — Crédito</h2>` +
+            `<div class="meta">${lineaSocio}` +
+            `<div>Fecha: ${fecha} · Monto: ${fmt(Number(monto), moneda)} · Plazo: ${plazo} cuotas · Tasa: ${tasa}%</div>` +
+            `<div>Total a pagar: ${fmt(tabla.monto_total, moneda)} · Cuota mensual: ${fmt(tabla.cuota_mensual, moneda)}</div>` +
+            `</div>` +
+            `<table><thead><tr><th>N°</th><th>Cuota</th><th>Capital</th><th>Interés</th><th>Saldo</th></tr></thead>` +
+            `<tbody>${filasHtml}</tbody></table></body></html>`;
+
+        const iframe = document.createElement('iframe');
+        iframe.setAttribute('aria-hidden', 'true');
+        iframe.style.position = 'fixed';
+        iframe.style.left = '-9999px';
+        iframe.style.width = '0';
+        iframe.style.height = '0';
+        iframe.style.border = '0';
+        document.body.appendChild(iframe);
+
+        const win = iframe.contentWindow;
+        const doc = win?.document;
+        if (!win || !doc) { iframe.remove(); return; }
+        doc.open();
+        doc.write(html);
+        doc.close();
+
+        const lanzar = () => {
+            win.focus();
+            win.print();
+            setTimeout(() => iframe.remove(), 1000);
+        };
+        if (doc.readyState === 'complete') {
+            setTimeout(lanzar, 150);
+        } else {
+            iframe.onload = () => setTimeout(lanzar, 150);
         }
     }
 
@@ -212,14 +304,14 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
             <div className="config-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
                 <div className="form-group custom-fg">
                     <label className="form-label">Monto solicitado</label>
-                    <input className="form-input" inputMode="numeric" placeholder="Ej: 500000"
-                        value={monto} onChange={e => setMonto(e.target.value.replace(/\D/g, ''))} />
+                    <input className="form-input" inputMode="numeric" placeholder="Ej: 500.000"
+                        value={monto ? fmtNum(parseNum(monto)) : ''} onChange={e => setMonto(e.target.value.replace(/\D/g, ''))} />
                 </div>
                 <div className="form-group custom-fg">
                     <label className="form-label">Tasa (%)</label>
                     <input className="form-input" readOnly
                         value={tasa}
-                        title="La tasa se toma de la configuración del Bankomunal (RF-59)"
+                        title="La tasa se toma de la configuración del Bankomunal"
                         style={{ backgroundColor: '#f8fafc', color: '#64748b' }} />
                 </div>
                 <div className="form-group custom-fg">
@@ -232,15 +324,20 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
             {/* ── Vista previa ── */}
             <h3 className="section-title">VISTA PREVIA — TABLA DE PAGOS (saldo decreciente)</h3>
             {tabla ? (
-                <TablaAmortizacion cuotas={tabla.cuotas} monto={Number(monto)} moneda={moneda} />
+                <>
+                    <TablaAmortizacion cuotas={tabla.cuotas} monto={Number(monto)} moneda={moneda} />
+                    <div className="text-sm mt-4" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>Total a pagar: <strong>{fmt(tabla.monto_total, moneda)}</strong></span>
+                        <span>Cuota mensual: <strong>{fmt(tabla.cuota_mensual, moneda)}</strong></span>
+                    </div>
+                    <div className="mt-4">
+                        <button className="btn btn-secondary" onClick={imprimirTabla}>
+                            🖨 Imprimir tabla
+                        </button>
+                    </div>
+                </>
             ) : (
                 <div className="text-sm text-muted">Complete el monto y el plazo para ver la tabla de pagos.</div>
-            )}
-            {tabla && (
-                <div className="text-sm text-muted mt-4" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span>Total a pagar: <strong>{fmt(tabla.monto_total, moneda)}</strong></span>
-                    <span>Cuota mensual: <strong>{fmt(tabla.cuota_mensual, moneda)}</strong></span>
-                </div>
             )}
 
             {/* ── Garantías ── */}
@@ -269,7 +366,7 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
             <div className="config-grid mt-4" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
                 <div className="form-group custom-fg">
                     <label className="form-label">Acciones del solicitante</label>
-                    <input className="form-input" value={`${accionesReales} acciones = ${fmt(valorAcciones, moneda)}`} readOnly title="Las acciones se leen del libro de acciones (RF-56); el solicitante respalda con las que posee realmente" />
+                    <input className="form-input" value={`${accionesReales} acciones = ${fmt(valorAcciones, moneda)}`} readOnly title="Las acciones se leen del libro de acciones; el solicitante respalda con las que posee realmente" />
                 </div>
                 <div className="form-group custom-fg">
                     <label className="form-label">Acciones en garantía (Fiador 1)</label>

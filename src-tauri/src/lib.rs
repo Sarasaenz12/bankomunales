@@ -1,37 +1,58 @@
-mod core;
-mod modules;
+pub mod core;
+pub mod modules;
 mod state;
 
 use std::sync::Arc;
 
 use tauri::Manager;
 
+use crate::modules::reportes::presentation::{
+    guardar_excel, reporte_acciones, reporte_balance, reporte_creditos,
+    reporte_fiadores, reporte_gestion, reporte_libro, reporte_socios_activos,
+};
+use crate::modules::respaldo::application::RespaldoService;
+use crate::modules::respaldo::data::SQLiteRespaldoRepository;
+use crate::modules::respaldo::presentation::{
+    crear_respaldo_cmd, listar_respaldos_cmd, restaurar_respaldo_cmd,
+};
+use crate::modules::socios::application::SocioService;
+use crate::modules::socios::data::SqliteSocios;
 use core::db::DbManager;
 use core::error::AppError;
-use modules::auth::application::AuthService;
-use modules::auth::data::{BcryptHasher, SqliteAppSettings, SqliteBancoCatalogo};
-use modules::configuracion::application::ConfigService;
 use modules::acciones::application::AccionesService;
 use modules::acciones::data::{
     LibroViaCaja, SqliteCierres, SqliteLotesAcciones, SqliteParametrosAcciones,
 };
 use modules::auditoria::data::SqliteAuditoria;
+use modules::auth::application::AuthService;
+use modules::auth::data::{BcryptHasher, SqliteAppSettings, SqliteBancoCatalogo};
 use modules::caja::application::CajaService;
 use modules::caja::data::{SqliteBienes, SqliteFondoGastos, SqliteLibro};
+use modules::cierre::application::CierreService;
+use modules::cierre::data::{
+    LibroViaCaja as LibroViaCajaCierre, SqliteBienesCierre, SqliteCartera,
+    SqliteCierres as SqliteCierresCierre, SqliteFondosCierre, SqliteLibroCierre, SqliteLotesCierre,
+    SqliteReparto, SqliteSociosCierre,
+};
+use modules::configuracion::application::ConfigService;
 use modules::configuracion::data::SqliteConfiguracion;
 use modules::creditos::application::CreditoService;
 use modules::creditos::data::{
     AccionesParaCreditoAdapter, LibroViaCaja as LibroViaCajaCreditos, ParametrosCreditoAdapter,
     SociosParaCreditoAdapter, SqliteCreditos, SqliteSolicitudes,
 };
-use modules::socios::application::SocioService;
-use modules::socios::data::SqliteSocios;
+use modules::deuda::application::DeudaService;
+use modules::deuda::data::{
+    LibroViaCaja as LibroViaCajaDeuda, SqliteCreditoConsulta, SqliteCuotas, SqliteParametrosDeuda,
+};
+use modules::reportes::application::ReportesService;
+use modules::reportes::data::SqliteReportes;
 use state::AppState;
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Ruta de datos de la app: %APPDATA%/com.estra.bankomunales
             let app_path = app
@@ -82,7 +103,39 @@ pub fn run() {
                 Arc::new(LibroViaCajaCreditos::new(caja.clone())),
             ));
 
-            app.manage(AppState::new(auth, config, socios, caja, acciones, creditos));
+            let cierre: Arc<CierreService> = Arc::new(CierreService::new(
+                Arc::new(SqliteCierresCierre::new(db.clone())),
+                Arc::new(SqliteReparto::new(db.clone())),
+                Arc::new(SqliteLibroCierre::new(db.clone())),
+                Arc::new(SqliteCartera::new(db.clone())),
+                Arc::new(SqliteBienesCierre::new(db.clone())),
+                Arc::new(SqliteFondosCierre::new(db.clone())),
+                Arc::new(SqliteLotesCierre::new(db.clone())),
+                Arc::new(SqliteSociosCierre::new(db.clone())),
+                Arc::new(LibroViaCajaCierre::new(caja.clone())),
+                Arc::new(SqliteAuditoria::new(db.clone())),
+            ));
+
+            let deuda: Arc<DeudaService> = Arc::new(DeudaService::new(
+                Arc::new(SqliteCreditoConsulta::new(db.clone())),
+                Arc::new(SqliteCuotas::new(db.clone())),
+                Arc::new(LibroViaCajaDeuda::new(caja.clone())),
+                Arc::new(SqliteParametrosDeuda::new(db.clone())),
+                Arc::new(SqliteAuditoria::new(db.clone())),
+            ));
+
+            let reportes: Arc<ReportesService> = Arc::new(ReportesService::new(Arc::new(
+                SqliteReportes::new(db.clone()),
+            )));
+
+            let respaldo: Arc<RespaldoService> =
+                Arc::new(RespaldoService::new(Arc::new(SQLiteRespaldoRepository {
+                    db: Arc::new(db.clone()),
+                })));
+
+            app.manage(AppState::new(
+                auth, config, socios, caja, acciones, creditos, cierre, deuda, reportes, respaldo,
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -93,6 +146,7 @@ pub fn run() {
             modules::auth::presentation::seleccionar_bankomunal,
             modules::auth::presentation::volver_a_seleccion,
             modules::auth::presentation::banco_seleccionado,
+            modules::auth::presentation::sesion_iniciada,
             modules::configuracion::presentation::obtener_configuracion,
             modules::configuracion::presentation::obtener_datos_generales,
             modules::configuracion::presentation::actualizar_configuracion,
@@ -124,7 +178,44 @@ pub fn run() {
             modules::creditos::presentation::listar_solicitudes_desembolsables,
             modules::creditos::presentation::previsualizar_desembolso,
             modules::creditos::presentation::registrar_desembolso,
+            modules::creditos::presentation::registrar_refinanciamiento,
             modules::creditos::presentation::buscar_credito_por_solicitud,
+            modules::creditos::presentation::siguiente_numero_credito,
+            modules::creditos::presentation::listar_creditos,
+            modules::creditos::presentation::creditos_de_socio,
+            modules::creditos::presentation::creditos_que_avala_socio,
+            modules::cierre::presentation::previsualizar_cierre,
+            modules::cierre::presentation::desglose_reparto_mes,
+            modules::cierre::presentation::ejecutar_cierre,
+            modules::cierre::presentation::listar_cierres,
+            modules::cierre::presentation::detalle_cierre,
+            modules::cierre::presentation::reparto_anual,
+            modules::cierre::presentation::pagar_ganancias_cumplidas,
+            modules::cierre::presentation::resumen_pagos_ganancias,
+            modules::cierre::presentation::pagar_ganancias_de_socio,
+            modules::deuda::presentation::estado_credito_deuda,
+            modules::deuda::presentation::registrar_pago_cuota,
+            modules::deuda::presentation::pagar_cuotas,
+            modules::deuda::presentation::abonar_capital,
+            modules::liquidacion::presentation::preparar_liquidacion_final,
+            modules::liquidacion::presentation::calcular_liquidacion_final,
+            modules::liquidacion::presentation::preparar_liquidacion_socio,
+            modules::liquidacion::presentation::ejecutar_retiro_socio,
+            modules::liquidacion::presentation::previsualizar_liquidacion_parcial,
+            modules::liquidacion::presentation::ejecutar_liquidacion_parcial,
+            modules::liquidacion::presentation::registrar_pago_deuda_pendiente,
+            modules::liquidacion::presentation::listar_retirados_con_deuda,
+            reporte_socios_activos,
+            reporte_gestion,
+            reporte_fiadores,
+            reporte_creditos,
+            reporte_libro,
+            reporte_acciones,
+            reporte_balance,
+            guardar_excel,
+            crear_respaldo_cmd,
+            restaurar_respaldo_cmd,
+            listar_respaldos_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

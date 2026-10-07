@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { cajaService } from './cajaService';
 import { Bien, TipoBien } from './types';
-import { fmt } from '../../core/lib/format';
+import { fmt, fmtNum, parseNum } from '../../core/lib/format';
 import { HOY } from '../../core/lib/dates';
+import { useEnvioUnico } from '../../core/lib/useEnvioUnico';
 
 export function BienesTab({ bienes, moneda, onHecho, onError }: {
     bienes: Bien[];
@@ -14,9 +15,9 @@ export function BienesTab({ bienes, moneda, onHecho, onError }: {
     const [fecha, setFecha] = useState(HOY());
     const [valor, setValor] = useState('');
     const [tipo, setTipo] = useState<TipoBien>('PROPIO');
+    const { enviando, ejecutar } = useEnvioUnico();
 
-    async function guardar(e: React.FormEvent) {
-        e.preventDefault();
+    async function guardar() {
         try {
             await cajaService.registrarBien({
                 descripcion, fecha, valor: Number(valor || 0), tipo,
@@ -31,11 +32,13 @@ export function BienesTab({ bienes, moneda, onHecho, onError }: {
 
     return (
         <>
-            <form className="detalle-card" onSubmit={guardar} style={{ maxWidth: 900 }}>
+            <form className="detalle-card" onSubmit={e => { e.preventDefault(); ejecutar(guardar); }} style={{ maxWidth: 900 }}>
                 <h3 className="section-title">REGISTRAR BIEN ADQUIRIDO</h3>
                 <p className="text-sm text-muted" style={{ marginTop: '-0.5rem', marginBottom: '1rem' }}>
-                    El bien se contabiliza como activo fijo y no afecta el saldo de caja (RF-88).
-                    Si se pagó con el Fondo para Gastos, registre además el gasto en la pestaña anterior.
+                    Un bien <strong>propio</strong> se compra con la caja: al registrarlo, su valor sale
+                    del efectivo y entra al activo fijo (permuta, no gasto — no reduce la ganancia
+                    repartible). Un bien en <strong>comodato</strong> es prestado por un tercero: no
+                    afecta la caja ni cuenta como activo propio, sólo queda registrado.
                 </p>
                 <div className="config-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
                     <div className="form-group custom-fg">
@@ -48,7 +51,7 @@ export function BienesTab({ bienes, moneda, onHecho, onError }: {
                     </div>
                     <div className="form-group custom-fg">
                         <label className="form-label">Valor</label>
-                        <input type="number" className="form-input" min="0" step="any" value={valor} onChange={e => setValor(e.target.value)} />
+                        <input type="text" inputMode="numeric" className="form-input" value={valor ? fmtNum(parseNum(valor)) : ''} onChange={e => setValor(e.target.value.replace(/\D/g, ''))} />
                     </div>
                     <div className="form-group custom-fg">
                         <label className="form-label">Tipo</label>
@@ -58,8 +61,8 @@ export function BienesTab({ bienes, moneda, onHecho, onError }: {
                         </select>
                     </div>
                 </div>
-                <button type="submit" className="btn btn-primary" style={{ marginTop: '1rem' }}>
-                    Registrar bien
+                <button type="submit" className="btn btn-primary" style={{ marginTop: '1rem' }} disabled={enviando}>
+                    {enviando ? 'Registrando…' : 'Registrar bien'}
                 </button>
             </form>
 

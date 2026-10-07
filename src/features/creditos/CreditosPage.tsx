@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { useBanco } from '../../core/context/BankContext';
 import { PageHeader } from '../../core/components/PageHeader';
 import { Tabs } from '../../core/components/Tabs';
-import { Pendiente } from '../../core/components/Pendiente';
 import { NuevaSolicitudTab } from './NuevaSolicitudTab';
 import { BandejaTab } from './BandejaTab';
 import { DesembolsoTab } from './DesembolsoTab';
+import { PagoCuotaTab } from '../deuda/PagoCuotaTab';
+import { RefinanciamientoTab } from '../deuda/RefinanciamientoTab';
+import { PagoDeudaPendienteTab } from '../deuda/PagoDeudaPendienteTab';
 
 type Pestana = 'nueva' | 'bandeja' | 'desembolso' | 'pago' | 'refinanciamiento' | 'deuda';
 
@@ -35,21 +37,11 @@ export function CreditosPage() {
             {pestana === 'bandeja' && <BandejaTab moneda={moneda} />}
             {pestana === 'desembolso' && <DesembolsoTab moneda={moneda} />}
 
-            {pestana === 'pago' && (
-                <Pendiente modulo="Pago de Créditos" requisitos="RF-63 a RF-72"
-                    razon="El pago de cuotas exige las cuotas ya desembolsadas de este módulo y la
-                           cartera vigente; entra en la siguiente fase (RF-63..RF-72)." />
-            )}
-            {pestana === 'refinanciamiento' && (
-                <Pendiente modulo="Refinanciamiento" requisitos="RF-82"
-                    razon="Refinanciar un crédito salda el anterior y abre uno nuevo; depende del
-                           registro de pagos (RF-63..RF-72), que aún no está construido." />
-            )}
-            {pestana === 'deuda' && (
-                <Pendiente modulo="Deuda Pendiente" requisitos="RF-73 a RF-79"
-                    razon="El reporte de deuda pendiente sale de las cuotas en mora, que produce el
-                           módulo de pagos (RF-63..RF-72)." />
-            )}
+            {pestana === 'pago' && <PagoCuotaTab moneda={moneda} />}
+
+            {pestana === 'refinanciamiento' && <RefinanciamientoTab moneda={moneda} />}
+
+            {pestana === 'deuda' && <PagoDeudaPendienteTab moneda={moneda} />}
         </div>
     );
 }

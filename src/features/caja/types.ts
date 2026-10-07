@@ -7,10 +7,10 @@ export type CodigoOperacion =
 
 /** Los que el usuario puede teclear desde la pantalla de Caja. */
 export const OPERACIONES_CAJA: { codigo: CodigoOperacion; etiqueta: string; ayuda: string }[] = [
-  { codigo: 'OI', etiqueta: 'Otro Ingreso', ayuda: 'Entra dinero a la caja (RF-83)' },
-  { codigo: 'EG', etiqueta: 'Otro Egreso', ayuda: 'Sale dinero de la caja (RF-84)' },
-  { codigo: 'IFG', etiqueta: 'Ingreso al Fondo para Gastos', ayuda: 'Suma al Fondo para Gastos (RF-85)' },
-  { codigo: 'GBK', etiqueta: 'Gasto del Bankomunal', ayuda: 'Se descuenta del Fondo para Gastos (RF-86)' },
+  { codigo: 'OI', etiqueta: 'Otro Ingreso', ayuda: 'Entra dinero a la caja' },
+  { codigo: 'EG', etiqueta: 'Otro Egreso', ayuda: 'Sale dinero de la caja' },
+  { codigo: 'IFG', etiqueta: 'Ingreso al Fondo para Gastos', ayuda: 'Suma al Fondo para Gastos' },
+  { codigo: 'GBK', etiqueta: 'Gasto del Bankomunal', ayuda: 'Se descuenta del Fondo para Gastos' },
 ];
 
 export interface Movimiento {

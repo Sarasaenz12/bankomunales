@@ -8,43 +8,30 @@ import {
 
 export interface ResultadoValidacion { ok: boolean; mensaje: string; }
 
-/** Valores por defecto usados mientras no haya configuración cargada. */
-const VALORES_DEFECTO = {
-    valor_nominal: 10000,
-    pct_garantia_socio: 20,
-    pct_garantia_fiador: 20,
-};
-
-/** Cálculo de la cuota mensual aproximada de un crédito (RF-59). */
-export function cuotaMensual(monto: number, tasa: number, plazo: number): number {
-    return plazo > 0 ? monto * (1 + tasa / 100) / plazo : 0;
-}
-
 /** RN-03 (RF-56): relación 1 a 5 — el monto no puede superar 5 veces el valor
- * de las acciones que el socio posee realmente (acciones × valor nominal). */
-export function maximoRn03(accionesReales: number, config?: Configuracion | null): number {
-    const vn = config?.valor_nominal ?? VALORES_DEFECTO.valor_nominal;
-    return 5 * accionesReales * vn;
+ * de las acciones que el socio posee realmente (acciones × valor nominal).
+ *
+ * Estas comprobaciones son sólo para el feedback inmediato de la pantalla; la
+ * validación autoritativa la hace el backend al enviar. Exigen la `Configuracion`
+ * real cargada — sin valores por defecto que puedan mentir si la config difiere. */
+export function maximoRn03(accionesReales: number, config: Configuracion): number {
+    return 5 * accionesReales * config.valor_nominal;
 }
 
-export function cumpleRn03(monto: number, accionesReales: number, config?: Configuracion | null): boolean {
+export function cumpleRn03(monto: number, accionesReales: number, config: Configuracion): boolean {
     return monto > 0 && monto <= maximoRn03(accionesReales, config);
 }
 
 /** RN-04 (RF-49): garantía por partes. El solicitante cubre con sus acciones reales
  * el pct_garantia_socio% y los fiadores, con las comprometidas, el pct_garantia_fiador%. */
-export function cumpleRn04Socio(monto: number, accionesReales: number, config?: Configuracion | null): boolean {
-    const vn = config?.valor_nominal ?? VALORES_DEFECTO.valor_nominal;
-    const pct = config?.pct_garantia_socio ?? VALORES_DEFECTO.pct_garantia_socio;
-    return accionesReales * vn >= monto * pct / 100;
+export function cumpleRn04Socio(monto: number, accionesReales: number, config: Configuracion): boolean {
+    return accionesReales * config.valor_nominal >= monto * config.pct_garantia_socio / 100;
 }
 
 export function cumpleRn04Fiadores(
-    monto: number, accionesComprometidas: number, config?: Configuracion | null,
+    monto: number, accionesComprometidas: number, config: Configuracion,
 ): boolean {
-    const vn = config?.valor_nominal ?? VALORES_DEFECTO.valor_nominal;
-    const pct = config?.pct_garantia_fiador ?? VALORES_DEFECTO.pct_garantia_fiador;
-    return accionesComprometidas * vn >= monto * pct / 100;
+    return accionesComprometidas * config.valor_nominal >= monto * config.pct_garantia_fiador / 100;
 }
 
 /** Validación de una solicitud nueva o desembolso directo (RN-03, RN-04, RN-14). */
@@ -56,7 +43,7 @@ export function validarNuevaSolicitud(params: {
     fiadores: FiadorSolicitud[];
     accionesSolicitante: number;
     accionesComprometidas: number;
-    config?: Configuracion | null;
+    config: Configuracion;
 }): ResultadoValidacion {
     const {
         solicitante, monto, plazo, destino, fiadores, accionesSolicitante,
@@ -68,18 +55,16 @@ export function validarNuevaSolicitud(params: {
     if (!monto || monto <= 0) return { ok: false, mensaje: 'El monto solicitado debe ser mayor a cero' };
     if (!plazo || plazo <= 0) return { ok: false, mensaje: 'El plazo debe ser de al menos 1 cuota' };
     if (fiadores.length === 0) return { ok: false, mensaje: 'Todo crédito debe tener al menos un fiador' };
-    if (fiadores.length > 2) return { ok: false, mensaje: 'Se registran hasta 2 fiadores (RF-48)' };
+    if (fiadores.length > 2) return { ok: false, mensaje: 'Se registran hasta 2 fiadores' };
 
     if (!cumpleRn03(monto, accionesSolicitante, config)) {
         return { ok: false, mensaje: `El monto supera el cupo de la relación 1 a 5: máx. ${maximoRn03(accionesSolicitante, config)}` };
     }
     if (!cumpleRn04Socio(monto, accionesSolicitante, config)) {
-        const pct = config?.pct_garantia_socio ?? VALORES_DEFECTO.pct_garantia_socio;
-        return { ok: false, mensaje: `El solicitante no cubre su ${pct}% con sus acciones` };
+        return { ok: false, mensaje: `El solicitante no cubre su ${config.pct_garantia_socio}% con sus acciones` };
     }
     if (!cumpleRn04Fiadores(monto, accionesComprometidas, config)) {
-        const pct = config?.pct_garantia_fiador ?? VALORES_DEFECTO.pct_garantia_fiador;
-        return { ok: false, mensaje: `Los fiadores no cubren su ${pct}% con las acciones comprometidas` };
+        return { ok: false, mensaje: `Los fiadores no cubren su ${config.pct_garantia_fiador}% con las acciones comprometidas` };
     }
 
     return { ok: true, mensaje: '' };
@@ -118,4 +103,7 @@ export const creditosService = {
 
     buscarCreditoPorSolicitud: (solicitudId: string): Promise<Credito | null> =>
         api.buscarCreditoPorSolicitud(solicitudId),
+
+    siguienteNumeroCredito: (): Promise<string> =>
+        api.siguienteNumeroCredito(),
 };

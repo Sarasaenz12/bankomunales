@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { sociosService } from './sociosService';
 import { CupoSocios } from './types';
 import { AccionesDeSocio } from '../acciones/types';
@@ -12,7 +12,19 @@ type Filtro = 'todos' | 'activos' | 'retirados';
 
 export function SociosPage() {
     const navigate = useNavigate();
+    const location = useLocation();
     const bank = useBanco();
+    const [exito, setExito] = useState('');
+
+    // Al volver desde "Nuevo Socio" llega el nombre creado en el state de la ruta:
+    // se muestra el aviso una vez y se limpia para que no reaparezca al refrescar.
+    useEffect(() => {
+        const nombre = (location.state as { creadoNombre?: string } | null)?.creadoNombre;
+        if (nombre) {
+            setExito(`Socio ${nombre} creado correctamente.`);
+            navigate(location.pathname, { replace: true, state: null });
+        }
+    }, []);
     const [socios, setSocios] = useState<Awaited<ReturnType<typeof sociosService.listar>>>([]);
     const [cupo, setCupo] = useState<CupoSocios | null>(null);
     const [acciones, setAcciones] = useState<AccionesDeSocio[]>([]);
@@ -58,7 +70,7 @@ export function SociosPage() {
                     className="btn btn-primary"
                     onClick={() => navigate('/app/socios/nuevo')}
                     disabled={sinCupo}
-                    title={sinCupo ? `Máximo ${cupo?.maximo} socios activos (RN-01)` : undefined}
+                    title={sinCupo ? `Máximo ${cupo?.maximo} socios activos` : undefined}
                 >
                     + Nuevo Socio
                 </button>
@@ -79,17 +91,19 @@ export function SociosPage() {
             {sinCupo && (
                 <div className="error-message mb-4">
                     El Bankomunal alcanzó el máximo de {cupo?.maximo} socios activos que permite el
-                    reglamento (RN-01). Para registrar uno nuevo, primero debe retirarse otro.
+                    reglamento. Para registrar uno nuevo, primero debe retirarse otro.
                 </div>
             )}
             {error && <div className="error-message mb-4">{error}</div>}
+            {exito && <div className="success-message mb-4">{exito}</div>}
 
             <table className="activity-table">
                 <thead>
                     <tr>
+                        <th style={{ width: 56 }}>Nº</th>
                         <th>Nombre</th>
                         <th>Cédula</th>
-                        <th>Estatus</th>
+                        <th>Estado</th>
                         <th style={{ textAlign: 'right' }}>Acciones activas</th>
                         <th style={{ width: 80 }}></th>
                     </tr>
@@ -97,6 +111,7 @@ export function SociosPage() {
                 <tbody>
                     {visibles.map(s => (
                         <tr key={s.id}>
+                            <td className="text-muted">{s.numero}</td>
                             <td style={{ fontWeight: 500 }}>{s.nombre_completo}</td>
                             <td>{s.cedula}</td>
                             <td><BadgeEstatus estatus={s.estatus} /></td>

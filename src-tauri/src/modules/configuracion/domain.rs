@@ -2,13 +2,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::error::AppError;
 
-/// Umbrales del PPCFC (RN-09). Vienen del **reglamento fijo** de la metodología
-/// Bankomunales —"Si E es menor que 80% no se venderán acciones; entre 80% y 90%
-/// hasta un 10%; entre 90% y 100% hasta un 15%"— así que no los configura cada
-/// Bankomunal: son constantes de dominio. Lo configurable son los % a vender.
-pub const PPCFC_UMBRAL_MINIMO: f64 = 80.0;
-pub const PPCFC_UMBRAL_MEDIO: f64 = 90.0;
-
 /// Retención mínima de cada fondo, según el reglamento fijo: "Se apartará un fondo de
 /// gastos, no menor al 5% de las ganancias totales de cada mes" (ídem incobrables).
 pub const RETENCION_MINIMA_FONDO_PCT: f64 = 5.0;
@@ -40,10 +33,11 @@ pub struct Configuracion {
     /// se sigue apartando (D-04).
     pub tope_reserva_incobrables_pct: f64,
     /// % del total de acciones autorizado a vender cuando el PPCFC cae en el tramo
-    /// bajo (entre `PPCFC_UMBRAL_MINIMO` y `PPCFC_UMBRAL_MEDIO`). Por defecto 10%.
+    /// bajo (entre 80% y 90%). Por defecto 10%. Los umbrales del PPCFC son constantes
+    /// del reglamento y viven en el dominio de Acciones (`tramo_de_venta`).
     pub ppcfc_venta_rango1_pct: f64,
     /// % del total de acciones autorizado a vender cuando el PPCFC cae en el tramo
-    /// alto (entre `PPCFC_UMBRAL_MEDIO` y 100%). Por defecto 15%.
+    /// alto (entre 90% y 100%). Por defecto 15%.
     pub ppcfc_venta_rango2_pct: f64,
     /// RN-15: tope que un solo socio puede comprar en un mismo mes, como % del cupo que
     /// el PPCFC autorizó vender ese mes (RN-09) — no del capital total del Bankomunal.
@@ -95,6 +89,8 @@ pub struct DatosGenerales {
     pub numero_creditos_otorgados: i64,
     pub monto_total_creditos: f64,
     pub numero_acciones_vendidas: i64,
+    /// Socios activos en el Bankomunal (RN-01).
+    pub socios_activos: i64,
     /// Saldos acumulados de los dos fondos (RF-11, D-11).
     pub saldo_fondo_gastos: f64,
     pub saldo_fondo_incobrables: f64,

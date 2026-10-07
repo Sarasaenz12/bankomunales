@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { cajaService } from './cajaService';
 import { CodigoOperacion, OPERACIONES_CAJA } from './types';
 import { HOY } from '../../core/lib/dates';
+import { fmtNum, parseNum } from '../../core/lib/format';
+import { useEnvioUnico } from '../../core/lib/useEnvioUnico';
 
 export function RegistrarTab({ onHecho, onError }: {
     onHecho: (m: string) => void;
@@ -11,13 +13,13 @@ export function RegistrarTab({ onHecho, onError }: {
     const [fecha, setFecha] = useState(HOY());
     const [monto, setMonto] = useState('');
     const [descripcion, setDescripcion] = useState('');
+    const { enviando, ejecutar } = useEnvioUnico();
 
     const ayuda = codigo === 'DONACION'
-        ? 'Las donaciones entran automáticamente al Fondo para Gastos (RF-87)'
+        ? 'Las donaciones entran automáticamente al Fondo para Gastos'
         : OPERACIONES_CAJA.find(o => o.codigo === codigo)?.ayuda ?? '';
 
-    async function guardar(e: React.FormEvent) {
-        e.preventDefault();
+    async function guardar() {
         try {
             if (codigo === 'DONACION') {
                 await cajaService.registrarDonacion(fecha, Number(monto), descripcion);
@@ -33,7 +35,7 @@ export function RegistrarTab({ onHecho, onError }: {
     }
 
     return (
-        <form className="detalle-card" onSubmit={guardar} style={{ maxWidth: 720 }}>
+        <form className="detalle-card" onSubmit={e => { e.preventDefault(); ejecutar(guardar); }} style={{ maxWidth: 720 }}>
             <div className="config-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
                 <div className="form-group custom-fg">
                     <label className="form-label">Tipo de operación</label>
@@ -47,7 +49,7 @@ export function RegistrarTab({ onHecho, onError }: {
                         ))}
                         <option value="DONACION">Donación</option>
                     </select>
-                    <div className="text-sm text-muted mt-1" style={{ fontSize: 11 }}>{ayuda}</div>
+                    <div className="text-sm text-muted mt-1" style={{ fontSize: 11, padding: '0.2rem'}}>{ayuda}</div>
                 </div>
                 <div className="form-group custom-fg">
                     <label className="form-label">Fecha</label>
@@ -58,7 +60,7 @@ export function RegistrarTab({ onHecho, onError }: {
             <div className="config-grid mt-4" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
                 <div className="form-group custom-fg">
                     <label className="form-label">Monto</label>
-                    <input type="number" className="form-input" min="1" step="any" value={monto} onChange={e => setMonto(e.target.value)} required />
+                    <input type="text" inputMode="numeric" className="form-input" value={monto ? fmtNum(parseNum(monto)) : ''} onChange={e => setMonto(e.target.value.replace(/\D/g, ''))} required />
                 </div>
                 <div className="form-group custom-fg">
                     <label className="form-label">Descripción</label>
@@ -66,8 +68,8 @@ export function RegistrarTab({ onHecho, onError }: {
                 </div>
             </div>
 
-            <button type="submit" className="btn btn-primary" style={{ marginTop: '1rem' }}>
-                Registrar operación
+            <button type="submit" className="btn btn-primary" style={{ marginTop: '1rem' }} disabled={enviando}>
+                {enviando ? 'Registrando…' : 'Registrar operación'}
             </button>
         </form>
     );

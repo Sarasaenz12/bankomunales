@@ -27,4 +27,6 @@ uuid = { version = "1", features = ["serde", "v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 bcrypt = "0.15"
 thiserror = "1"
+tauri-plugin-dialog = "2.7.2"
+rust_xlsxwriter = "0.79"
 

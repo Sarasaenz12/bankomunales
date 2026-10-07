@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Users, TrendingUp, CreditCard, DollarSign } from 'lucide-react';
 import { dashboardService } from './dashboardService';
 import { DatosGenerales } from '../../core/types';
@@ -12,6 +13,7 @@ const RECENT_PLACEHOLDER = [
 ];
 
 export function DashboardPage() {
+    const navigate = useNavigate();
     const bank = useBanco();
     const [datos, setDatos] = useState<DatosGenerales | null>(null);
     const [auditoria, setAuditoria] = useState<any[]>([]);
@@ -20,11 +22,28 @@ export function DashboardPage() {
     useEffect(() => {
         if (!bank) return;
         dashboardService.cargarDatos()
-            .then(({ datos, auditoria }) => { setDatos(datos); setAuditoria(auditoria); })
+            .then(({ datos: d, auditoria }) => { 
+                setDatos(d);
+                console.log('🟢 Datos del dashboard:', d); 
+                setAuditoria(auditoria);
+            })
             .catch(e => setError(e?.toString() || 'Error'));
     }, [bank]);
 
+    useEffect(() => {
+        if (!bank) return;
+        dashboardService.cargarResumenGeneral()
+            .then(({ datos: d }) => { 
+                setDatos(d);
+                console.log('🟢 Datos resumen general:', d); 
+            })
+            .catch(e => console.error('Error cargando resumen general:', e));
+    }, [bank]);
+
     if (error) return <div className="page-error">{error}</div>;
+
+    const sociosActivos = datos?.socios_activos ?? 0;
+    const creditosVigentes = datos?.creditos_vigentes ?? 0;
 
     return (
         <div className="page">
@@ -35,21 +54,21 @@ export function DashboardPage() {
                 <KpiCard
                     icon={<Users size={20} />}
                     label="Socios activos"
-                    value={datos ? String(datos.numero_acciones_vendidas > 0 ? '—' : '0') : '…'}
-                    sub="datos de socios próximamente"
+                    value={String(sociosActivos)}
+                    sub="datos de socios próximos"
                     color="blue"
                 />
                 <KpiCard
                     icon={<CreditCard size={20} />}
                     label="Créditos otorgados"
-                    value={datos ? String(datos.numero_creditos_otorgados) : '…'}
+                    value={String(datos?.numero_creditos_otorgados ?? '…')}
                     sub={datos ? `Monto total: ${fmt(datos.monto_total_creditos, datos.moneda)}` : ''}
                     color="indigo"
                 />
                 <KpiCard
                     icon={<TrendingUp size={20} />}
                     label="Acciones vendidas"
-                    value={datos ? String(datos.numero_acciones_vendidas) : '…'}
+                    value={String(datos?.numero_acciones_vendidas ?? '…')}
                     sub={datos ? `Valor nominal: ${fmt(datos.valor_nominal, datos.moneda)}` : ''}
                     color="violet"
                 />
@@ -59,6 +78,14 @@ export function DashboardPage() {
                     value={datos ? fmt(datos.saldo_fondo_gastos, datos.moneda) : '…'}
                     sub={datos ? `Fondo Incobrables: ${fmt(datos.saldo_fondo_incobrables, datos.moneda)}` : ''}
                     color="emerald"
+                />
+                {/* New: Créditos vigentes card */}
+                <KpiCard
+                    icon={<CreditCard size={20} />}
+                    label="Créditos vigentes"
+                    value={String(creditosVigentes)}
+                    sub="créditos con pagos al día"
+                    color="indigo"
                 />
             </div>
 
@@ -99,9 +126,9 @@ export function DashboardPage() {
 
             {/* ── Quick actions ── */}
             <div className="quick-grid">
-                <QuickBtn icon={<Users size={28} />} label="Socios" />
-                <QuickBtn icon={<TrendingUp size={28} />} label="Acciones" />
-                <QuickBtn icon={<CreditCard size={28} />} label="Créditos" />
+                <QuickBtn icon={<Users size={28} />} label="Socios" onClick={() => navigate('/app/socios')} />
+                <QuickBtn icon={<TrendingUp size={28} />} label="Acciones" onClick={() => navigate('/app/acciones')} />
+                <QuickBtn icon={<CreditCard size={28} />} label="Créditos" onClick={() => navigate('/app/creditos')} />
             </div>
         </div>
     );
@@ -120,9 +147,9 @@ function KpiCard({ icon, label, value, sub, color }: {
     );
 }
 
-function QuickBtn({ icon, label }: { icon: React.ReactNode; label: string }) {
+function QuickBtn({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
     return (
-        <button className="quick-btn">
+        <button className="quick-btn" onClick={onClick}>
             {icon}
             <span>{label}</span>
         </button>

@@ -379,11 +379,18 @@ Describe el entorno tecnológico existente del cliente (si aplica).
   **RF-40**    Calcular el \"Total Ingresos Repartibles\" del mes, sumando
               Intereses Ordinarios + Intereses de Mora + Otros Ingresos.
 
-  **RF-41**    Restar del total anterior los montos apartados para Fondo de
-              Incobrables y Fondo de Gastos, para obtener el Balance de
-              Gestión Mensual Neto. (El Fondo de Protección quedó fuera del
-              alcance --- aplicaba solo a los Bankomunales de Venezuela; ver
-              D-05 en decisiones-pendientes.md.)
+  **RF-41**    Restar del total anterior los \"Otros Egresos\" del mes (código
+              EG) y los montos apartados para Fondo de Incobrables y Fondo
+              de Gastos, para obtener el Balance de Gestión Mensual Neto. El
+              gasto con código GBK NO se resta (ya sale del Fondo de Gastos,
+              no de los ingresos repartibles; ver D-20 en
+              decisiones-pendientes.md). (El Fondo de Protección quedó fuera
+              del alcance --- aplicaba solo a los Bankomunales de Venezuela;
+              ver D-05 en decisiones-pendientes.md.)
+
+              El reparto del mes se devenga al cerrar el mes (D-13): el
+              módulo de Cierre ejecuta RF-39, RF-40 y RF-41 como parte del
+              proceso de cierre.
 
   **RF-42**    Calcular la ganancia a pagar a cada socio (acciones que
               cumplen año × valor de ganancia por acción).
@@ -586,8 +593,12 @@ Describe el entorno tecnológico existente del cliente (si aplica).
   **RF-87**    Registrar Donaciones, ingresándolas automáticamente como
               Ingreso al Fondo para Gastos
 
-  **RF-88**    Registrar Bienes Adquiridos (propios o en comodato) como
-              Activo Fijo, sin afectar el saldo de caja
+  **RF-88**    Registrar Bienes Adquiridos como Activo Fijo. Un bien propio
+              es una permuta dentro del Activo: baja la Caja (egreso CAF) y
+              sube el activo fijo el mismo monto, sin tocar el Pasivo ni
+              reducir la ganancia repartible. Un bien en comodato es de un
+              tercero: no afecta la Caja ni cuenta como Activo propio, sólo
+              queda registrado (corregido 2026-08-20, ver D-20 c)
 
   **RF-89**    Permitir corregir cualquier operación del Libro de Ingresos
               y Egresos antes del Cierre de Mes
@@ -1491,9 +1502,12 @@ Crédito**
 |                    | 3.  El sistema actualiza el saldo acumulado del |
 |                    |     > Fondo para Gastos.                        |
 +--------------------+-------------------------------------------------+
-| **Flujo            | Si se registra un Bien Adquirido, el sistema lo |
-| alternativo:**     | contabiliza como Activo Fijo sin afectar el     |
-|                    | saldo de caja.                                  |
+| **Flujo            | Si se registra un Bien Adquirido propio, el     |
+| alternativo:**     | sistema lo contabiliza como Activo Fijo y       |
+|                    | asienta un egreso CAF por su valor: la Caja baja |
+|                    | y el activo fijo sube el mismo monto (permuta). |
+|                    | Un bien en comodato sólo se registra, sin tocar |
+|                    | la Caja ni el Activo (ver D-20 c).              |
 +--------------------+-------------------------------------------------+
 | **Postcondición:** | El saldo del Fondo para Gastos queda            |
 |                    | actualizado.                                    |

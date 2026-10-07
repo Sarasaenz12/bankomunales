@@ -23,6 +23,12 @@ pub enum CodigoOperacion {
     /// Gastos del Bankomunal (RF-86), pagados con el Fondo para Gastos.
     #[serde(rename = "GBK")]
     GastoBankomunal,
+    /// Compra de Activo Fijo (RF-88, D-20 c): la salida de caja al comprar un bien
+    /// propio. Es un egreso que permuta caja por activo fijo (Activo = Activo); NO
+    /// reduce la ganancia repartible ni el Fondo para Gastos. Lo genera `registrar_bien`,
+    /// no se teclea a mano desde Caja.
+    #[serde(rename = "CAF")]
+    CompraActivoFijo,
 
     // ── Los que registrarán otros módulos ──
     /// Venta de Certificados/Acciones (RF-22).
@@ -61,6 +67,7 @@ impl CodigoOperacion {
             Self::OtroEgreso => "EG",
             Self::IngresoFondoGastos => "IFG",
             Self::GastoBankomunal => "GBK",
+            Self::CompraActivoFijo => "CAF",
             Self::VentaAcciones => "VC",
             Self::LiquidacionAcciones => "LC",
             Self::GananciaRepartida => "UR",
@@ -79,6 +86,7 @@ impl CodigoOperacion {
             "EG" => Self::OtroEgreso,
             "IFG" => Self::IngresoFondoGastos,
             "GBK" => Self::GastoBankomunal,
+            "CAF" => Self::CompraActivoFijo,
             "VC" => Self::VentaAcciones,
             "LC" => Self::LiquidacionAcciones,
             "UR" => Self::GananciaRepartida,
@@ -227,16 +235,38 @@ pub struct FiltroLibro {
 /// --- Puertos (hexagonal) ---
 
 pub trait LibroPort: Send + Sync {
-    fn registrar(&self, banco_id: &str, mov: &Movimiento) -> Result<(), AppError>;
-    fn actualizar(&self, banco_id: &str, mov: &Movimiento) -> Result<(), AppError>;
+    /// Asienta un movimiento nuevo y, en la MISMA transacción, ajusta el Fondo para
+    /// Gastos en `delta_fondo` y recalcula la columna `saldo` de todo el Libro.
+    ///
+    /// `delta_fondo` es 0 para las operaciones que no tocan el fondo (OI/EG y los
+    /// asientos de otros módulos). Que las dos escrituras sean atómicas es lo que impide
+    /// que un IFG/GBK quede en el Libro con el Fondo para Gastos desincronizado, lo que
+    /// descuadraría el Balance (Activo = Pasivo).
+    ///
+    /// El recálculo es necesario porque un asiento con fecha anterior desplaza todos los
+    /// saldos siguientes.
+    fn registrar_con_ajuste_fondo(
+        &self,
+        banco_id: &str,
+        mov: &Movimiento,
+        delta_fondo: f64,
+    ) -> Result<(), AppError>;
+    /// Corrige un movimiento existente y, en la MISMA transacción, ajusta el Fondo para
+    /// Gastos por la diferencia (`delta_fondo`) y recalcula los saldos. Mismo motivo de
+    /// atomicidad que `registrar_con_ajuste_fondo`.
+    fn actualizar_con_ajuste_fondo(
+        &self,
+        banco_id: &str,
+        mov: &Movimiento,
+        delta_fondo: f64,
+    ) -> Result<(), AppError>;
     fn buscar_por_id(&self, banco_id: &str, id: &str) -> Result<Option<Movimiento>, AppError>;
     fn listar(&self, banco_id: &str, filtro: &FiltroLibro) -> Result<Vec<Movimiento>, AppError>;
     /// Siguiente consecutivo del Libro para este Bankomunal.
     fn siguiente_numero(&self, banco_id: &str) -> Result<i64, AppError>;
-    /// Recalcula la columna `saldo` de todo el Libro en orden cronológico.
-    /// Se ejecuta tras cada escritura: un asiento con fecha anterior o una corrección
-    /// desplazan todos los saldos siguientes.
-    fn recalcular_saldos(&self, banco_id: &str) -> Result<(), AppError>;
+    /// Saldo de caja del último asiento (el más reciente por fecha y consecutivo), o 0 si
+    /// el Libro está vacío. Evita cargar todo el Libro sólo para leer el saldo final.
+    fn ultimo_saldo(&self, banco_id: &str) -> Result<f64, AppError>;
 }
 
 /// Saldo acumulado del Fondo para Gastos (RF-85, RF-86, RF-11).
@@ -245,7 +275,6 @@ pub trait LibroPort: Send + Sync {
 /// declara aquí lo que necesita y el adaptador lo resuelve (inversión de dependencias).
 pub trait FondoGastosPort: Send + Sync {
     fn saldo(&self, banco_id: &str) -> Result<f64, AppError>;
-    fn ajustar(&self, banco_id: &str, delta: f64) -> Result<(), AppError>;
 }
 
 pub trait BienPort: Send + Sync {

@@ -1,6 +1,7 @@
 import { api } from '../../core/lib/api';
 import { DatosSocio, Socio, SocioResumen, CupoSocios } from './types';
 import { AccionesDeSocio } from '../acciones/types';
+import { Credito } from '../creditos/types';
 
 export const sociosService = {
     listar: () => api.listarSocios(),
@@ -33,4 +34,10 @@ export const sociosService = {
     accionesDeSocio: (id: string) => api.accionesDeSocio(id),
 
     historialAcciones: (id: string) => api.historialAccionesSocio(id),
+
+    /** Historial de créditos desembolsados de los que el socio es titular (RF-19). */
+    creditosDeSocio: (id: string): Promise<Credito[]> => api.creditosDeSocio(id),
+
+    /** Créditos de terceros que este socio avala como fiador (RF-48, RN-04). */
+    creditosQueAvala: (id: string): Promise<Credito[]> => api.creditosQueAvalaSocio(id),
 };

@@ -8,7 +8,7 @@ use crate::modules::auditoria::domain::{tipo_accion, AuditoriaPort, EntradaAudit
 
 use super::domain::{
     Bien, BienPort, CodigoOperacion, FiltroLibro, FondoGastosPort, LibroPort, Movimiento,
-    NuevaOperacion, NuevoBien,
+    NuevaOperacion, NuevoBien, TipoBien,
 };
 
 /// Capa de Aplicación/Servicios del módulo de Caja y Contabilidad.
@@ -63,7 +63,7 @@ impl CajaService {
             if nueva.monto > disponible {
                 return Err(AppError::OperacionNoPermitida(format!(
                     "El Fondo para Gastos tiene {disponible:.2} disponible y el gasto es de \
-                     {:.2}. No se puede gastar más de lo acumulado en el fondo (RF-86)",
+                     {:.2}. No se puede gastar más de lo acumulado en el fondo",
                     nueva.monto
                 )));
             }
@@ -88,9 +88,13 @@ impl CajaService {
             motivo_correccion: None,
         };
 
-        self.libro.registrar(banco_id, &mov)?;
-        self.aplicar_al_fondo(banco_id, nueva.codigo, nueva.monto)?;
-        self.libro.recalcular_saldos(banco_id)?;
+        // El asiento y el ajuste del Fondo para Gastos entran en una sola transacción:
+        // un IFG/GBK nunca queda en el Libro con el fondo desincronizado (cuadre).
+        self.libro.registrar_con_ajuste_fondo(
+            banco_id,
+            &mov,
+            nueva.codigo.efecto_en_fondo_gastos() * nueva.monto,
+        )?;
 
         // Se relee para devolver el saldo ya recalculado.
         self.libro
@@ -147,8 +151,8 @@ impl CajaService {
             motivo_correccion: None,
         };
 
-        self.libro.registrar(banco_id, &mov)?;
-        self.libro.recalcular_saldos(banco_id)?;
+        // Los asientos de otros módulos (VC/CON/PC…) nunca tocan el Fondo para Gastos.
+        self.libro.registrar_con_ajuste_fondo(banco_id, &mov, 0.0)?;
         self.libro
             .buscar_por_id(banco_id, &mov.id)?
             .ok_or(AppError::MovimientoNoEncontrado)
@@ -205,6 +209,22 @@ impl CajaService {
             .buscar_por_id(banco_id, id)?
             .ok_or(AppError::MovimientoNoEncontrado)?;
 
+        // RF-89/90: corregir el Libro es sólo para las operaciones que se teclean en Caja
+        // (OI/EG/IFG/GBK). Los asientos que genera otro módulo —venta de acciones (VC),
+        // desembolso (CON), pago de cuota (PC/OR/MO), refinanciamiento (COR), liquidación
+        // (LC) o ganancias (UR)— son el reflejo de sus tablas fuente (crédito, cuota,
+        // lote). Editar sólo el asiento dejaría la caja descuadrada contra esas tablas, así
+        // que la corrección debe hacerse desde el módulo que originó la operación.
+        if !anterior.codigo.registrable_en_caja() {
+            return Err(AppError::OperacionNoPermitida(format!(
+                "La operación #{} ({}) la generó otro módulo y no puede corregirse desde el \
+                 Libro: hágalo desde el módulo que la originó para que la caja y sus tablas \
+                 queden consistentes",
+                anterior.numero,
+                anterior.codigo.as_str()
+            )));
+        }
+
         // RF-90: sobre un mes ya cerrado, la corrección exige trazabilidad.
         let cerrado = anterior.mes_cerrado();
         let (quien, porque) = match (cerrado, &nombre_quien_realiza, &motivo) {
@@ -215,7 +235,7 @@ impl CajaService {
             (true, _, _) => {
                 return Err(AppError::OperacionNoPermitida(
                     "El mes de esta operación ya está cerrado: para corregirla debe indicar \
-                     su nombre y el motivo del cambio (RF-90)"
+                     su nombre y el motivo del cambio"
                         .into(),
                 ))
             }
@@ -252,12 +272,14 @@ impl CajaService {
             ..anterior.clone()
         };
 
-        self.libro.actualizar(banco_id, &corregido)?;
-
-        // El Fondo para Gastos se ajusta por la diferencia, no por el monto completo.
+        // El movimiento corregido y el ajuste del Fondo para Gastos (por la DIFERENCIA,
+        // no por el monto completo) entran en una sola transacción.
         let delta = monto - monto_anterior;
-        self.aplicar_al_fondo(banco_id, anterior.codigo, delta)?;
-        self.libro.recalcular_saldos(banco_id)?;
+        self.libro.actualizar_con_ajuste_fondo(
+            banco_id,
+            &corregido,
+            anterior.codigo.efecto_en_fondo_gastos() * delta,
+        )?;
 
         if cerrado {
             self.auditoria.registrar(
@@ -292,12 +314,7 @@ impl CajaService {
 
     /// Saldo disponible en caja: el del último asiento del Libro.
     pub fn saldo_caja(&self, banco_id: &str) -> Result<f64, AppError> {
-        Ok(self
-            .libro
-            .listar(banco_id, &FiltroLibro::default())?
-            .last()
-            .map(|m| m.saldo)
-            .unwrap_or(0.0))
+        self.libro.ultimo_saldo(banco_id)
     }
 
     pub fn saldo_fondo_gastos(&self, banco_id: &str) -> Result<f64, AppError> {
@@ -306,9 +323,12 @@ impl CajaService {
 
     /// RF-88 (CU-17, flujo alternativo): registra un Bien Adquirido como Activo Fijo.
     ///
-    /// No toca el Libro ni el saldo de caja a propósito: el bien es patrimonio, no un
-    /// movimiento de efectivo. Si se pagó con plata del Fondo para Gastos, ese
-    /// desembolso se registra aparte como Gasto del Bankomunal (GBK).
+    /// D-20 (c): comprar un bien **propio** es una permuta dentro del Activo — sale
+    /// dinero de la Caja y entra al Activo Fijo—, así que se asienta un egreso CAF por
+    /// su valor y el efectivo baja. Ese egreso NO reduce la ganancia repartible ni el
+    /// Fondo para Gastos: sólo cambia caja por bien. Un bien en **comodato** es de un
+    /// tercero (no se compra ni se paga): se registra como memorando y no toca la caja
+    /// ni cuenta como Activo propio en el Balance.
     pub fn registrar_bien(&self, banco_id: &str, nuevo: NuevoBien) -> Result<Bien, AppError> {
         if nuevo.descripcion.trim().is_empty() {
             return Err(AppError::OperacionNoPermitida(
@@ -328,6 +348,20 @@ impl CajaService {
             tipo: nuevo.tipo,
         };
         self.bienes.registrar(banco_id, &bien)?;
+
+        // La compra de un bien propio con valor baja la caja (permuta Activo→Activo).
+        // El comodato no: no hubo desembolso.
+        if bien.tipo == TipoBien::Propio && bien.valor > 0.0 {
+            self.registrar_asiento_de_modulo(
+                banco_id,
+                CodigoOperacion::CompraActivoFijo,
+                bien.fecha_adquisicion.clone(),
+                bien.valor,
+                format!("Compra de activo fijo — {}", bien.descripcion),
+                None,
+                None,
+            )?;
+        }
         Ok(bien)
     }
 
@@ -339,18 +373,6 @@ impl CajaService {
         self.bienes.valor_total(banco_id)
     }
 
-    fn aplicar_al_fondo(
-        &self,
-        banco_id: &str,
-        codigo: CodigoOperacion,
-        monto: f64,
-    ) -> Result<(), AppError> {
-        let signo = codigo.efecto_en_fondo_gastos();
-        if signo != 0.0 {
-            self.fondo.ajustar(banco_id, signo * monto)?;
-        }
-        Ok(())
-    }
 }
 
 fn ahora() -> String {
@@ -673,6 +695,33 @@ mod tests {
         assert!(e.motivo.as_deref().unwrap().contains("digitación"));
     }
 
+    /// Un asiento generado por otro módulo (VC, CON, PC…) no puede corregirse desde el
+    /// Libro: hacerlo descuadraría la caja contra la tabla fuente (crédito/lote/cuota).
+    #[test]
+    fn no_se_corrige_un_asiento_de_otro_modulo_desde_el_libro() {
+        let (svc, banco) = test_service();
+        // Un módulo asienta una venta de acciones (VC) por su puerta aparte.
+        let vc = svc
+            .registrar_asiento_de_modulo(
+                &banco,
+                CodigoOperacion::VentaAcciones,
+                "2026-08-01".into(),
+                50_000.0,
+                "Venta de 5 acciones".into(),
+                None,
+                None,
+            )
+            .unwrap();
+
+        let err = svc
+            .corregir_operacion(&banco, &vc.id, "2026-08-01".into(), 40_000.0, "x".into(), None, None)
+            .unwrap_err();
+        assert!(matches!(err, AppError::OperacionNoPermitida(_)));
+
+        // El asiento no se tocó: sigue con su monto original.
+        assert_eq!(svc.saldo_caja(&banco).unwrap(), 50_000.0);
+    }
+
     #[test]
     fn corregir_operacion_inexistente_devuelve_error() {
         let (svc, banco) = test_service();
@@ -704,11 +753,12 @@ mod tests {
         assert_eq!(svc.listar_libro(&banco, FiltroLibro::default()).unwrap().len(), 3);
     }
 
-    /// RF-88: el bien es patrimonio, no efectivo — no toca el Libro ni el saldo de caja.
+    /// D-20 (c): comprar un bien propio es una permuta dentro del Activo — baja la
+    /// caja con un egreso CAF y sube el activo fijo por el mismo valor.
     #[test]
-    fn el_bien_adquirido_no_afecta_la_caja() {
+    fn el_bien_propio_baja_la_caja_como_permuta() {
         let (svc, banco) = test_service();
-        svc.registrar_operacion(&banco, op(CodigoOperacion::OtroIngreso, "2026-08-01", 10_000.0))
+        svc.registrar_operacion(&banco, op(CodigoOperacion::OtroIngreso, "2026-08-01", 100_000.0))
             .unwrap();
 
         svc.registrar_bien(
@@ -722,24 +772,41 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(svc.saldo_caja(&banco).unwrap(), 10_000.0, "la caja no cambia");
-        assert_eq!(svc.listar_libro(&banco, FiltroLibro::default()).unwrap().len(), 1);
+        // La caja baja por el valor del bien; el activo fijo lo recibe.
+        assert_eq!(svc.saldo_caja(&banco).unwrap(), 20_000.0, "la caja baja por la compra");
         assert_eq!(svc.valor_activo_fijo(&banco).unwrap(), 80_000.0);
+
+        // Se asentó un egreso CAF en el Libro.
+        let libro = svc.listar_libro(&banco, FiltroLibro::default()).unwrap();
+        assert_eq!(libro.len(), 2);
+        let caf = libro.iter().find(|m| m.codigo == CodigoOperacion::CompraActivoFijo).unwrap();
+        assert_eq!(caf.egreso, 80_000.0);
+        assert_eq!(caf.ingreso, 0.0);
     }
 
+    /// El comodato es de un tercero: no se paga, no toca la caja ni cuenta como
+    /// activo propio, pero sí queda registrado como memorando.
     #[test]
-    fn los_bienes_en_comodato_tambien_se_registran() {
+    fn el_bien_en_comodato_no_afecta_la_caja_ni_el_activo() {
         let (svc, banco) = test_service();
+        svc.registrar_operacion(&banco, op(CodigoOperacion::OtroIngreso, "2026-08-01", 10_000.0))
+            .unwrap();
+
         svc.registrar_bien(
             &banco,
             NuevoBien {
                 descripcion: "Mesa prestada".into(),
                 fecha_adquisicion: "2026-08-04".into(),
-                valor: 0.0,
+                valor: 50_000.0,
                 tipo: TipoBien::Comodato,
             },
         )
         .unwrap();
+
+        assert_eq!(svc.saldo_caja(&banco).unwrap(), 10_000.0, "el comodato no toca la caja");
+        assert_eq!(svc.listar_libro(&banco, FiltroLibro::default()).unwrap().len(), 1);
+        assert_eq!(svc.valor_activo_fijo(&banco).unwrap(), 0.0, "el comodato no es activo propio");
+
         let bienes = svc.listar_bienes(&banco).unwrap();
         assert_eq!(bienes.len(), 1);
         assert_eq!(bienes[0].tipo, TipoBien::Comodato);

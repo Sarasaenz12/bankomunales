@@ -13,10 +13,17 @@ export function TablaIngresosEgresos({ filas, setFilas, ejemplos }: {
 
     return (
         <div>
+            {/* Encabezados de columna */}
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.35rem' }}>
+                <span className="form-label" style={{ flex: 1, margin: 0 }}>TIPO</span>
+                <span className="form-label" style={{ width: 140, margin: 0, textAlign: 'right' }}>MONTO</span>
+                <span style={{ width: 44 }} />
+            </div>
             {filas.map((fila, i) => (
                 <div key={i} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
                     <input
                         className="form-input"
+                        style={{ flex: 1 }}
                         placeholder={ejemplos[i] ?? 'Tipo de ingreso/egreso'}
                         value={fila.tipo}
                         onChange={e => {
@@ -27,7 +34,7 @@ export function TablaIngresosEgresos({ filas, setFilas, ejemplos }: {
                     />
                     <input
                         className="form-input"
-                        style={{ maxWidth: 140 }}
+                        style={{ width: 140, flexShrink: 0 }}
                         placeholder="Monto"
                         inputMode="numeric"
                         value={fila.monto}

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::core::error::AppError;
+use crate::core::format::pesos;
 
 use super::domain::{
     calcular_ppcfc, mes_de, meses_entre, tramo_de_venta, AutorizacionVenta, CalculoCompra,
@@ -27,7 +28,12 @@ impl AccionesService {
         libro: Arc<dyn LibroContablePort>,
         cierres: Arc<dyn CierresPort>,
     ) -> Self {
-        Self { lotes, parametros, libro, cierres }
+        Self {
+            lotes,
+            parametros,
+            libro,
+            cierres,
+        }
     }
 
     /// RF-26 (RN-09 + RN-15): cupo de venta de acciones del mes.
@@ -123,9 +129,47 @@ impl AccionesService {
         if calculo.supera_tope_participacion {
             return Err(AppError::OperacionNoPermitida(format!(
                 "Con esta compra el socio quedaría con el {:.2}% de las acciones del \
-                 Bankomunal y ningún socio puede superar el {TOPE_PARTICIPACION_PCT}% (RN-02)",
+                 Bankomunal y ningún socio puede superar el {TOPE_PARTICIPACION_PCT}%",
                 calculo.participacion_pct
             )));
+        }
+
+        // RN-09 + RN-15: la compra debe caber en el cupo de venta del mes (según el PPCFC)
+        // y no pasar del tope individual. Mientras el PPCFC no sea calculable (primeros
+        // meses, aún sin 3 cierres), la Junta autoriza a criterio y no se bloquea (D-02).
+        let cupo = self.cupo_del_mes(banco_id, &fecha)?;
+        match &cupo.autorizacion {
+            AutorizacionVenta::NoAutoriza { ppcfc_pct } => {
+                return Err(AppError::OperacionNoPermitida(format!(
+                    "El PPCFC del mes es {ppcfc_pct:.2}%, por debajo del 80%: este mes no se \
+                     autoriza vender acciones"
+                )));
+            }
+            AutorizacionVenta::Autoriza { .. } => {
+                if let Some(disponible) = cupo.disponible_monto {
+                    if calculo.monto > disponible + 0.01 {
+                        return Err(AppError::OperacionNoPermitida(format!(
+                            "La compra (${}) supera el cupo de venta disponible del mes (${})",
+                            pesos(calculo.monto),
+                            pesos(disponible)
+                        )));
+                    }
+                }
+                if let Some(tope) = cupo.tope_individual_monto {
+                    let ya = self
+                        .lotes
+                        .monto_de_socio_en_mes(banco_id, &nueva.socio_id, &mes_compra)?;
+                    if ya + calculo.monto > tope + 0.01 {
+                        return Err(AppError::OperacionNoPermitida(format!(
+                            "El socio no puede comprar más acciones este mes: el tope por socio \
+                             es de ${} y esta compra lo superaría",
+                            pesos(tope)
+                        )));
+                    }
+                }
+            }
+            // Primeros meses (< 3 cierres): la Junta decide, no se bloquea (D-02).
+            AutorizacionVenta::SinDatosSuficientes { .. } => {}
         }
 
         let lote = LoteAcciones {
@@ -142,14 +186,19 @@ impl AccionesService {
 
         self.lotes.crear(banco_id, &lote)?;
 
-        // RF-22: la compra entra a la caja como Venta de Certificados (VC).
-        self.libro.registrar_venta_acciones(
+        // RF-22: la compra entra a la caja como Venta de Certificados (VC). Si el asiento
+        // falla, se deshace el lote: nunca deben quedar acciones registradas sin su ingreso
+        // en el Libro, porque el capital en acciones (Pasivo) no cuadraría con la caja.
+        if let Err(e) = self.libro.registrar_venta_acciones(
             banco_id,
             &fecha,
             calculo.monto,
             &nueva.socio_id,
             &format!("Venta de {} acciones", calculo.cantidad),
-        )?;
+        ) {
+            let _ = self.lotes.eliminar(banco_id, &lote.id);
+            return Err(e);
+        }
 
         Ok(lote)
     }
@@ -160,9 +209,60 @@ impl AccionesService {
         self.lotes.acciones_de_socio(banco_id, socio_id)
     }
 
+    /// Capital invertido por un socio en lotes vigentes (nominal congelado por lote): lo
+    /// que se le devuelve al retirarse. Ver `LoteAccionesPort::capital_activo_de_socio`.
+    pub fn capital_activo_de_socio(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+    ) -> Result<f64, AppError> {
+        self.lotes.capital_activo_de_socio(banco_id, socio_id)
+    }
+
     /// Total de acciones vigentes del Bankomunal.
     pub fn total_acciones(&self, banco_id: &str) -> Result<i64, AppError> {
         self.lotes.total_acciones(banco_id)
+    }
+
+    /// RF-28 (Liquidación total): Marca como liquidadas todas las acciones vivas de un socio.
+    /// Devuelve la cantidad de acciones liquidadas.
+    pub fn liquidar_lotes_de_socio(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+        fecha: &str,
+    ) -> Result<i64, AppError> {
+        self.lotes
+            .liquidar_lotes_de_socio(banco_id, socio_id, fecha)
+    }
+
+    /// RF-28 (Liquidación PARCIAL): liquida `cantidad` acciones libres de un socio (FIFO),
+    /// partiendo un lote si hace falta. Devuelve los trozos liquidados, con su capital y
+    /// mes de compra, para que el Cierre salde su ganancia según el aniversario (RN-10).
+    pub fn liquidar_acciones_parcial(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+        cantidad: i64,
+        fecha: &str,
+    ) -> Result<Vec<super::domain::LoteLiquidado>, AppError> {
+        self.lotes
+            .liquidar_acciones_parcial(banco_id, socio_id, cantidad, fecha)
+    }
+
+    /// Lotes vivos de un socio, del más antiguo al más nuevo (FIFO): insumo del plan de
+    /// una liquidación parcial (qué lotes se consumen y en qué orden).
+    pub fn lotes_activos_de_socio(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+    ) -> Result<Vec<LoteAcciones>, AppError> {
+        Ok(self
+            .lotes
+            .listar_de_socio(banco_id, socio_id)?
+            .into_iter()
+            .filter(|l| !l.liquidada)
+            .collect())
     }
 
     /// Acciones vigentes por socio, para la columna del listado de Socios.
@@ -228,8 +328,7 @@ impl AccionesService {
         let params = self.parametros.obtener(banco_id)?;
         if params.valor_nominal <= 0.0 {
             return Err(AppError::OperacionNoPermitida(
-                "El valor nominal de la acción debe configurarse antes de vender acciones \
-                 (RN-13)"
+                "El valor nominal de la acción debe configurarse antes de vender acciones"
                     .into(),
             ));
         }
@@ -244,12 +343,12 @@ impl AccionesService {
             let bajo = cantidad.max(0) as f64 * params.valor_nominal;
             let alto = (cantidad + 1) as f64 * params.valor_nominal;
             return Err(AppError::OperacionNoPermitida(format!(
-                "Con un valor nominal de {:.2} el monto debe ser múltiplo exacto: \
-                 {:.2} compra {} acciones y {:.2} compra {}",
-                params.valor_nominal,
-                bajo,
+                "Con un valor nominal de ${} el monto debe ser múltiplo exacto: \
+                 ${} compra {} acciones y ${} compra {}",
+                pesos(params.valor_nominal),
+                pesos(bajo),
                 cantidad.max(0),
-                alto,
+                pesos(alto),
                 cantidad + 1
             )));
         }
@@ -346,11 +445,22 @@ mod tests {
         let acciones = AccionesService::new(
             Arc::new(SqliteLotesAcciones::new(db.clone())),
             Arc::new(SqliteParametrosAcciones::new(db.clone())),
-            Arc::new(crate::modules::acciones::data::LibroViaCaja::new(caja.clone())),
-            Arc::new(crate::modules::acciones::data::SqliteCierres::new(db.clone())),
+            Arc::new(crate::modules::acciones::data::LibroViaCaja::new(
+                caja.clone(),
+            )),
+            Arc::new(crate::modules::acciones::data::SqliteCierres::new(
+                db.clone(),
+            )),
         );
         let socios = SocioService::new(Arc::new(SqliteSocios::new(db.clone())));
-        let ctx = Contexto { acciones, caja, config, socios, banco, db };
+        let ctx = Contexto {
+            acciones,
+            caja,
+            config,
+            socios,
+            banco,
+            db,
+        };
 
         // Por defecto el Bankomunal acaba de arrancar, que es el único estado en que se
         // puede formar el capital inicial: RN-02 haría imposible la primera compra —el
@@ -393,7 +503,11 @@ mod tests {
     fn compra(ctx: &Contexto, socio_id: &str, monto: f64) -> Result<LoteAcciones, AppError> {
         ctx.acciones.registrar_compra(
             &ctx.banco,
-            NuevaCompra { socio_id: socio_id.into(), fecha: "2026-08-05".into(), monto },
+            NuevaCompra {
+                socio_id: socio_id.into(),
+                fecha: "2026-08-05".into(),
+                monto,
+            },
         )
     }
 
@@ -423,9 +537,10 @@ mod tests {
         let ctx = contexto();
         let err = compra(&ctx, &socio(&ctx, 1), 25_000.0).unwrap_err();
         let msg = err.to_string();
-        // El mensaje orienta al cajero con los dos montos válidos más cercanos.
-        assert!(msg.contains("20000.00"), "{msg}");
-        assert!(msg.contains("30000.00"), "{msg}");
+        // El mensaje orienta al cajero con los dos montos válidos más cercanos,
+        // en pesos enteros con separador de miles (sin centavos).
+        assert!(msg.contains("20.000"), "{msg}");
+        assert!(msg.contains("30.000"), "{msg}");
         assert_eq!(ctx.acciones.total_acciones(&ctx.banco).unwrap(), 0);
     }
 
@@ -440,7 +555,11 @@ mod tests {
             .acciones
             .registrar_compra(
                 &ctx.banco,
-                NuevaCompra { socio_id: socio(&ctx, 1), fecha: "  ".into(), monto: 10_000.0 },
+                NuevaCompra {
+                    socio_id: socio(&ctx, 1),
+                    fecha: "  ".into(),
+                    monto: 10_000.0
+                },
             )
             .is_err());
     }
@@ -453,7 +572,12 @@ mod tests {
         compra(&ctx, &socio(&ctx, 2), 70_000.0).unwrap(); // 7 acciones
 
         assert_eq!(ctx.acciones.total_acciones(&ctx.banco).unwrap(), 10);
-        assert_eq!(ctx.acciones.acciones_de_socio(&ctx.banco, &socio(&ctx, 1)).unwrap(), 3);
+        assert_eq!(
+            ctx.acciones
+                .acciones_de_socio(&ctx.banco, &socio(&ctx, 1))
+                .unwrap(),
+            3
+        );
 
         // El socio 1 compra 2 más: 5 de 12.
         let previo = ctx
@@ -481,11 +605,17 @@ mod tests {
         // El socio 1 quiere 10 más: quedaría con 20 de 100 = 20% > 15%.
         let err = compra(&ctx, &socio(&ctx, 1), 100_000.0).unwrap_err();
         assert!(matches!(err, AppError::OperacionNoPermitida(_)));
-        assert!(err.to_string().contains("RN-02"));
+        assert!(err.to_string().contains("ningún socio puede superar"));
 
         // Nada se registró: ni el lote ni el asiento en el Libro.
         assert_eq!(ctx.acciones.total_acciones(&ctx.banco).unwrap(), 90);
-        assert_eq!(ctx.caja.listar_libro(&ctx.banco, FiltroLibro::default()).unwrap().len(), 9);
+        assert_eq!(
+            ctx.caja
+                .listar_libro(&ctx.banco, FiltroLibro::default())
+                .unwrap()
+                .len(),
+            9
+        );
     }
 
     /// Justo en el 15% todavía se permite: el tope es "más del 15%".
@@ -546,7 +676,7 @@ mod tests {
         let ctx = contexto();
         ctx.creado_el("2026-05-01T00:00:00"); // 3 meses antes de agosto
         let err = compra(&ctx, &socio(&ctx, 1), 100_000.0).unwrap_err();
-        assert!(err.to_string().contains("RN-02"));
+        assert!(err.to_string().contains("ningún socio puede superar"));
     }
 
     /// RF-22: la compra entra al Libro de Ingresos y Egresos como VC.
@@ -556,7 +686,10 @@ mod tests {
         let s1 = socio(&ctx, 1);
         compra(&ctx, &s1, 40_000.0).unwrap();
 
-        let libro = ctx.caja.listar_libro(&ctx.banco, FiltroLibro::default()).unwrap();
+        let libro = ctx
+            .caja
+            .listar_libro(&ctx.banco, FiltroLibro::default())
+            .unwrap();
         assert_eq!(libro.len(), 1);
         let mov = &libro[0];
         assert_eq!(mov.codigo.as_str(), "VC");
@@ -587,11 +720,20 @@ mod tests {
         assert_eq!(nuevo.cantidad, 2);
 
         // El lote viejo conserva su nominal y su cantidad.
-        let lotes = ctx.acciones.lotes.listar_de_socio(&ctx.banco, &socio(&ctx, 1)).unwrap();
+        let lotes = ctx
+            .acciones
+            .lotes
+            .listar_de_socio(&ctx.banco, &socio(&ctx, 1))
+            .unwrap();
         let viejo = lotes.iter().find(|l| l.id == antiguo.id).unwrap();
         assert_eq!(viejo.valor_nominal_compra, 10_000.0);
         assert_eq!(viejo.cantidad, 3);
-        assert_eq!(ctx.acciones.acciones_de_socio(&ctx.banco, &socio(&ctx, 1)).unwrap(), 5);
+        assert_eq!(
+            ctx.acciones
+                .acciones_de_socio(&ctx.banco, &socio(&ctx, 1))
+                .unwrap(),
+            5
+        );
     }
 
     /// RF-105: el historial agrupa por mes y acumula el saldo.
@@ -602,7 +744,11 @@ mod tests {
             ctx.acciones
                 .registrar_compra(
                     &ctx.banco,
-                    NuevaCompra { socio_id: socio(&ctx, 1), fecha: fecha.into(), monto },
+                    NuevaCompra {
+                        socio_id: socio(&ctx, 1),
+                        fecha: fecha.into(),
+                        monto,
+                    },
                 )
                 .unwrap();
         };
@@ -611,13 +757,19 @@ mod tests {
         comprar("2026-07-15", 10_000.0); // 2 compras en julio
         comprar("2026-07-20", 10_000.0);
 
-        let historial = ctx.acciones.historial_de_socio(&ctx.banco, &socio(&ctx, 1)).unwrap();
+        let historial = ctx
+            .acciones
+            .historial_de_socio(&ctx.banco, &socio(&ctx, 1))
+            .unwrap();
         assert_eq!(historial.len(), 3, "un renglón por mes, no por compra");
         assert_eq!(historial[0].mes, "2026-05-01");
         assert_eq!(historial[0].compradas, 3);
         assert_eq!(historial[0].saldo, 3);
         assert_eq!(historial[1].saldo, 4);
-        assert_eq!(historial[2].compradas, 2, "las dos compras de julio se suman");
+        assert_eq!(
+            historial[2].compradas, 2,
+            "las dos compras de julio se suman"
+        );
         assert_eq!(historial[2].saldo, 6);
     }
 
@@ -633,7 +785,11 @@ mod tests {
         let acciones_de = |id: &str| por_socio.iter().find(|(s, _)| s == id).map(|(_, n)| *n);
 
         assert_eq!(por_socio.len(), 2);
-        assert_eq!(acciones_de(&socio(&ctx, 1)), Some(5), "dos compras se suman");
+        assert_eq!(
+            acciones_de(&socio(&ctx, 1)),
+            Some(5),
+            "dos compras se suman"
+        );
         assert_eq!(acciones_de(&socio(&ctx, 2)), Some(1));
     }
 
@@ -675,13 +831,22 @@ mod tests {
         compra(&ctx, &socio(&ctx, 1), 1_000_000.0).unwrap();
         sellar_cierres(
             &ctx,
-            &[("2026-05-01", 90.0), ("2026-06-01", 92.0), ("2026-07-01", 94.0)],
+            &[
+                ("2026-05-01", 90.0),
+                ("2026-06-01", 92.0),
+                ("2026-07-01", 94.0),
+            ],
         );
 
         let cupo = ctx.acciones.cupo_del_mes(&ctx.banco, "2026-08-05").unwrap();
         match cupo.autorizacion {
             AutorizacionVenta::Autoriza {
-                ppcfc_pct, rango_desde, rango_hasta, venta_pct, cupo_acciones, cupo_monto,
+                ppcfc_pct,
+                rango_desde,
+                rango_hasta,
+                venta_pct,
+                cupo_acciones,
+                cupo_monto,
             } => {
                 assert_eq!(ppcfc_pct, 92.0);
                 assert_eq!((rango_desde, rango_hasta), (90.0, 100.0));
@@ -701,10 +866,17 @@ mod tests {
         let ctx = contexto();
         sellar_cierres(
             &ctx,
-            &[("2026-05-01", 70.0), ("2026-06-01", 75.0), ("2026-07-01", 80.0)],
+            &[
+                ("2026-05-01", 70.0),
+                ("2026-06-01", 75.0),
+                ("2026-07-01", 80.0),
+            ],
         );
         let cupo = ctx.acciones.cupo_del_mes(&ctx.banco, "2026-08-05").unwrap();
-        assert_eq!(cupo.autorizacion, AutorizacionVenta::NoAutoriza { ppcfc_pct: 75.0 });
+        assert_eq!(
+            cupo.autorizacion,
+            AutorizacionVenta::NoAutoriza { ppcfc_pct: 75.0 }
+        );
         assert_eq!(cupo.disponible_monto, None);
     }
 
@@ -715,7 +887,11 @@ mod tests {
         compra(&ctx, &socio(&ctx, 1), 1_000_000.0).unwrap(); // 100 acciones en agosto
         sellar_cierres(
             &ctx,
-            &[("2026-05-01", 95.0), ("2026-06-01", 95.0), ("2026-07-01", 95.0)],
+            &[
+                ("2026-05-01", 95.0),
+                ("2026-06-01", 95.0),
+                ("2026-07-01", 95.0),
+            ],
         );
 
         let cupo = ctx.acciones.cupo_del_mes(&ctx.banco, "2026-08-20").unwrap();
@@ -725,10 +901,121 @@ mod tests {
         assert_eq!(cupo.disponible_monto, Some(0.0), "no baja de cero");
     }
 
+    /// RN-09: con PPCFC bajo (<80%) no se autoriza vender, así que la compra se rechaza.
+    #[test]
+    fn el_ppcfc_bajo_bloquea_la_compra() {
+        let ctx = contexto();
+        sellar_cierres(
+            &ctx,
+            &[("2026-05-01", 70.0), ("2026-06-01", 75.0), ("2026-07-01", 80.0)],
+        );
+        let err = compra(&ctx, &socio(&ctx, 1), 50_000.0).unwrap_err();
+        assert!(
+            err.to_string().contains("no se autoriza vender acciones"),
+            "se esperaba el bloqueo por PPCFC bajo, llegó: {err}"
+        );
+    }
+
+    /// RN-09 + RN-15: con el PPCFC en verde, la compra debe caber en el cupo del mes y no
+    /// pasar del tope individual. Antes el cupo se mostraba pero no se aplicaba.
+    #[test]
+    fn la_compra_respeta_el_cupo_del_mes_y_el_tope_individual() {
+        let ctx = contexto();
+        let s1 = socio(&ctx, 1);
+        let s2 = socio(&ctx, 2);
+
+        // 100 acciones en circulación compradas en julio: dan el total sobre el que se
+        // calcula el cupo, sin consumir el cupo de agosto.
+        let conn = ctx.db.open_banco_db(&ctx.banco).unwrap();
+        conn.execute(
+            "INSERT INTO lote_acciones
+             (id, socio_id, mes_compra, fecha_compra, cantidad, valor_nominal_compra,
+              monto_pagado, liquidada)
+             VALUES (?1, ?2, '2026-07-01', '2026-07-01', 100, 10000, 1000000, 0)",
+            rusqlite::params![Uuid::new_v4().to_string(), s1],
+        )
+        .unwrap();
+        drop(conn);
+        sellar_cierres(
+            &ctx,
+            &[("2026-05-01", 90.0), ("2026-06-01", 92.0), ("2026-07-01", 94.0)],
+        );
+        // Cupo agosto = 15% de 100 = 15 acciones = $150.000; tope individual 20% = $30.000.
+
+        // Una sola compra de $200.000 supera el cupo del mes ($150.000): RN-09.
+        let err = compra(&ctx, &s2, 200_000.0).unwrap_err();
+        assert!(
+            err.to_string().contains("supera el cupo de venta disponible"),
+            "se esperaba el bloqueo por cupo del mes, llegó: {err}"
+        );
+
+        // Dentro de límites: $20.000 (2 acciones) pasa.
+        compra(&ctx, &s2, 20_000.0).unwrap();
+
+        // $50.000 más dejarían al socio en $70.000, sobre el tope individual ($30.000):
+        // RN-15.
+        let err = compra(&ctx, &s2, 50_000.0).unwrap_err();
+        assert!(
+            err.to_string().contains("tope por socio"),
+            "se esperaba el bloqueo por tope individual, llegó: {err}"
+        );
+    }
+
     #[test]
     fn un_socio_sin_compras_no_tiene_acciones_ni_historial() {
         let ctx = contexto();
-        assert_eq!(ctx.acciones.acciones_de_socio(&ctx.banco, &socio(&ctx, 9)).unwrap(), 0);
-        assert!(ctx.acciones.historial_de_socio(&ctx.banco, &socio(&ctx, 9)).unwrap().is_empty());
+        assert_eq!(
+            ctx.acciones
+                .acciones_de_socio(&ctx.banco, &socio(&ctx, 9))
+                .unwrap(),
+            0
+        );
+        assert!(ctx
+            .acciones
+            .historial_de_socio(&ctx.banco, &socio(&ctx, 9))
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Un Libro que siempre falla, para probar la compensación de la compra.
+    struct LibroFalla;
+    impl LibroContablePort for LibroFalla {
+        fn registrar_venta_acciones(
+            &self, _: &str, _: &str, _: f64, _: &str, _: &str,
+        ) -> Result<(), AppError> {
+            Err(AppError::OperacionNoPermitida("falla simulada del Libro".into()))
+        }
+    }
+
+    /// Atomicidad: si el asiento VC falla, la compra se deshace — no quedan acciones
+    /// registradas sin su ingreso en caja (el capital en acciones cuadraría de menos).
+    #[test]
+    fn si_el_asiento_falla_la_compra_no_deja_lote_a_medias() {
+        let ctx = contexto();
+        let socio_id = socio(&ctx, 1);
+
+        // Un servicio idéntico pero con un Libro que siempre falla, sobre la misma base.
+        let acciones_falla = AccionesService::new(
+            Arc::new(SqliteLotesAcciones::new(ctx.db.clone())),
+            Arc::new(SqliteParametrosAcciones::new(ctx.db.clone())),
+            Arc::new(LibroFalla),
+            Arc::new(crate::modules::acciones::data::SqliteCierres::new(ctx.db.clone())),
+        );
+
+        let err = acciones_falla
+            .registrar_compra(
+                &ctx.banco,
+                NuevaCompra {
+                    socio_id: socio_id.clone(),
+                    fecha: "2026-08-05".into(),
+                    monto: 50_000.0,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, AppError::OperacionNoPermitida(_)));
+
+        // Compensación: el lote se deshizo, no quedaron acciones registradas.
+        assert_eq!(ctx.acciones.acciones_de_socio(&ctx.banco, &socio_id).unwrap(), 0);
+        assert_eq!(ctx.acciones.total_acciones(&ctx.banco).unwrap(), 0);
     }
 }

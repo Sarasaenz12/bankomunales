@@ -11,10 +11,12 @@ pub mod tipo_accion {
     pub const MODIFICACION: &str = "MODIFICACION";
     /// Corrección de una operación del Libro tras el Cierre de Mes (RF-90, RF-97).
     pub const CORRECCION_OPERACION: &str = "CORRECCION_OPERACION";
-    /// Restauración de un archivo de respaldo (RF-113).
-    pub const RESTAURACION_RESPALDO: &str = "RESTAURACION_RESPALDO";
-    /// Borrado de un Bankomunal (RF-113).
-    pub const BORRADO_BANKOMUNAL: &str = "BORRADO_BANKOMUNAL";
+    /// Ejecución del Cierre de Mes (RF-91 a RF-97).
+    pub const CIERRE_MES: &str = "CIERRE_MES";
+    /// Pago de las ganancias devengadas al cumplir el año (RF-42).
+    pub const PAGO_GANANCIAS: &str = "PAGO_GANANCIAS";
+    /// Pago de una cuota de crédito: interés, capital y/o mora (RF-63 a RF-72).
+    pub const PAGO_CUOTA: &str = "PAGO_CUOTA";
 }
 
 /// Entrada de la bitácora de Auditoría (RF-112, RF-113, RF-114).

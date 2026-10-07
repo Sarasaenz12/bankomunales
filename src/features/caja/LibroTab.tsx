@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { cajaService } from './cajaService';
 import { Movimiento } from './types';
-import { fmt } from '../../core/lib/format';
+import { fmt, fmtNum, parseNum } from '../../core/lib/format';
 
 export const ETIQUETA_CODIGO: Record<string, string> = {
     OI: 'Otro Ingreso', EG: 'Otro Egreso',
@@ -10,6 +10,12 @@ export const ETIQUETA_CODIGO: Record<string, string> = {
     CON: 'Desembolso de Crédito', OR: 'Interés Ordinario', PC: 'Pago de Cuota',
     MO: 'Interés de Mora', PDP: 'Pago Deuda Pendiente', COR: 'Refinanciamiento',
 };
+
+// RF-89/90: sólo las operaciones que se teclean en Caja se corrigen desde el Libro. Los
+// asientos generados por otro módulo (VC, CON, PC, OR, MO, COR, LC, UR, PDP) son el
+// reflejo de sus tablas fuente; corregirlos aquí descuadraría la caja, así que su botón
+// no se muestra y la corrección se hace desde el módulo de origen.
+const CODIGOS_CORREGIBLES = new Set(['OI', 'EG', 'IFG', 'GBK']);
 
 export function LibroTab({ libro, moneda, desde, hasta, setDesde, setHasta, onFiltrar, onCorregido, onError }: {
     libro: Movimiento[];
@@ -52,7 +58,9 @@ export function LibroTab({ libro, moneda, desde, hasta, setDesde, setHasta, onFi
                     </tr>
                 </thead>
                 <tbody>
-                    {libro.map(m => (
+                    {/* Se muestra la última operación arriba y la primera abajo (más legible);
+                        cada fila conserva su propio N° y saldo acumulado. */}
+                    {[...libro].reverse().map(m => (
                         <tr key={m.id}>
                             <td>{m.numero}</td>
                             <td>{m.fecha}</td>
@@ -73,7 +81,9 @@ export function LibroTab({ libro, moneda, desde, hasta, setDesde, setHasta, onFi
                             <td style={{ textAlign: 'right' }}>{m.egreso ? fmt(m.egreso, moneda) : '—'}</td>
                             <td style={{ textAlign: 'right', fontWeight: 500 }}>{fmt(m.saldo, moneda)}</td>
                             <td style={{ textAlign: 'right' }}>
-                                <button className="link-ver" onClick={() => setCorrigiendo(m)}>Corregir</button>
+                                {CODIGOS_CORREGIBLES.has(m.codigo)
+                                    ? <button className="link-ver" onClick={() => setCorrigiendo(m)}>Corregir</button>
+                                    : <span className="text-xs text-muted" title="Se corrige desde el módulo que la originó">—</span>}
                             </td>
                         </tr>
                     ))}
@@ -104,7 +114,7 @@ function CorregirForm({ mov, onCancelar, onListo, onError }: {
     onError: (m: string) => void;
 }) {
     const [fecha, setFecha] = useState(mov.fecha);
-    const [monto, setMonto] = useState(String(mov.ingreso || mov.egreso));
+    const [monto, setMonto] = useState(String(Math.round(mov.ingreso || mov.egreso)));
     const [descripcion, setDescripcion] = useState(mov.descripcion);
     const [quien, setQuien] = useState('');
     const [motivo, setMotivo] = useState('');
@@ -130,7 +140,7 @@ function CorregirForm({ mov, onCancelar, onListo, onError }: {
             {mov.mes_cerrado && (
                 <div className="error-message mb-4">
                     El mes de esta operación ya está cerrado. Para corregirla debe indicar su
-                    nombre y el motivo; el cambio quedará registrado en Auditoría (RF-90).
+                    nombre y el motivo; el cambio quedará registrado en Auditoría.
                 </div>
             )}
 
@@ -141,7 +151,7 @@ function CorregirForm({ mov, onCancelar, onListo, onError }: {
                 </div>
                 <div className="form-group custom-fg">
                     <label className="form-label">Monto</label>
-                    <input type="number" className="form-input" min="1" step="any" value={monto} onChange={e => setMonto(e.target.value)} required />
+                    <input type="text" inputMode="numeric" className="form-input" value={monto ? fmtNum(parseNum(monto)) : ''} onChange={e => setMonto(e.target.value.replace(/\D/g, ''))} required />
                 </div>
                 <div className="form-group custom-fg">
                     <label className="form-label">Descripción</label>

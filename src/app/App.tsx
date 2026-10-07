@@ -5,6 +5,7 @@ import { DashboardPage } from '../features/dashboard/DashboardPage';
 import { ConfigPage } from '../features/configuracion/ConfigPage';
 import { SociosPage } from '../features/socios/SociosPage';
 import { SocioDetallePage } from '../features/socios/SocioDetallePage';
+import { BancoDetallePage } from '../features/bancos/BancoDetallePage';
 import { CajaPage } from '../features/caja/CajaPage';
 import { AccionesPage } from '../features/acciones/AccionesPage';
 import { CreditosPage } from '../features/creditos/CreditosPage';
@@ -26,6 +27,9 @@ function App() {
           <Route path="socios" element={<SociosPage />} />
           <Route path="socios/nuevo" element={<SocioDetallePage />} />
           <Route path="socios/:id" element={<SocioDetallePage />} />
+          <Route path="bancos" element={<BancoDetallePage />} />
+          <Route path="bancos/nuevo" element={<BancoDetallePage />} />
+          <Route path="bancos/:id" element={<BancoDetallePage />} />
           <Route path="acciones" element={<AccionesPage />} />
           <Route path="creditos" element={<CreditosPage />} />
           <Route path="caja" element={<CajaPage />} />

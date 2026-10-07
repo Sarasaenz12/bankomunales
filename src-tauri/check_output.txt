@@ -1,0 +1,140 @@
+﻿cargo : warning: variant `ClaveIncorrecta` is never constructed
+En línea: 1 Carácter: 1
++ cargo check 2>&1 | Out-File -Encoding utf8 check_output.txt
++ ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: varian...ver constructed:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  --> src\core\error.rs:16:5
+   |
+ 4 | pub enum AppError {
+   |          -------- variant in this enum
+...
+16 |     ClaveIncorrecta,
+   |     ^^^^^^^^^^^^^^^
+   |
+   = note: `AppError` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code 
+analysis
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `RESTAURACION_RESPALDO` is never used
+  --> src\modules\auditoria\domain.rs:21:15
+   |
+21 |     pub const RESTAURACION_RESPALDO: &str = "RESTAURACION_RESPALDO";
+   |               ^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `BORRADO_BANKOMUNAL` is never used
+  --> src\modules\auditoria\domain.rs:23:15
+   |
+23 |     pub const BORRADO_BANKOMUNAL: &str = "BORRADO_BANKOMUNAL";
+   |               ^^^^^^^^^^^^^^^^^^
+
+warning: method `ganancia_pendiente_de_socio` is never used
+   --> src\modules\cierre\application.rs:333:12
+    |
+ 39 | impl CierreService {
+    | ------------------ method in this implementation
+...
+333 |     pub fn ganancia_pendiente_de_socio(
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: method `pendiente_de_socio` is never used
+   --> src\modules\cierre\domain.rs:398:8
+    |
+377 | pub trait RepartoPort: Send + Sync {
+    |           ----------- method in this trait
+...
+398 |     fn pendiente_de_socio(&self, banco_id: &str, socio_id: &str) -> Result<f64, AppError>;
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: constant `PPCFC_UMBRAL_MINIMO` is never used
+ --> src\modules\configuracion\domain.rs:9:11
+  |
+9 | pub const PPCFC_UMBRAL_MINIMO: f64 = 80.0;
+  |           ^^^^^^^^^^^^^^^^^^^
+
+warning: constant `PPCFC_UMBRAL_MEDIO` is never used
+  --> src\modules\configuracion\domain.rs:10:11
+   |
+10 | pub const PPCFC_UMBRAL_MEDIO: f64 = 90.0;
+   |           ^^^^^^^^^^^^^^^^^^
+
+warning: constant `MIN_FIADORES` is never used
+ --> src\modules\creditos\domain.rs:6:11
+  |
+6 | pub const MIN_FIADORES: usize = 1;
+  |           ^^^^^^^^^^^^
+
+warning: method `contar_vigentes` is never used
+   --> src\modules\creditos\domain.rs:475:8
+    |
+431 | pub trait CreditoPort: Send + Sync {
+    |           ----------- method in this trait
+...
+475 |     fn contar_vigentes(&self, banco_id: &str, socio_id: &str) -> Result<i64, AppError>;
+    |        ^^^^^^^^^^^^^^^
+
+warning: field `ganancia` is never read
+  --> src\modules\liquidacion\application.rs:48:9
+   |
+43 | pub struct DatosRetiroSocio {
+   |            ---------------- field in this struct
+...
+48 |     pub ganancia: f64,
+   |         ^^^^^^^^
+   |
+   = note: `DatosRetiroSocio` has derived impls for the traits `Clone` and `Debug`, but these are intentionally 
+ignored during dead code analysis
+
+warning: method `esta_retirado` is never used
+  --> src\modules\socios\domain.rs:53:12
+   |
+32 | impl EstatusSocio {
+   | ----------------- method in this implementation
+...
+53 |     pub fn esta_retirado(&self) -> bool {
+   |            ^^^^^^^^^^^^^
+
+warning: methods `acciones_libres`, `acciones_activas`, and `tiene_credito_vigente` are never used
+   --> src\modules\socios\domain.rs:114:12
+    |
+100 | impl Socio {
+    | ---------- methods in this implementation
+...
+114 |     pub fn acciones_libres(&self) -> i64 {
+    |            ^^^^^^^^^^^^^^^
+...
+121 |     pub fn acciones_activas(&self) -> i64 {
+    |            ^^^^^^^^^^^^^^^^
+...
+128 |     pub fn tiene_credito_vigente(&self) -> bool {
+    |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: variable `nombreQuienRealiza` should have a snake case name
+  --> src\modules\cierre\presentation.rs:48:5
+   |
+48 |     nombreQuienRealiza: String,
+   |     ^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `nombre_quien_realiza`
+   |
+   = note: `#[warn(non_snake_case)]` (part of `#[warn(nonstandard_style)]`) on by default
+
+warning: variable `socioId` should have a snake case name
+   --> src\modules\cierre\presentation.rs:124:5
+    |
+124 |     socioId: String,
+    |     ^^^^^^^ help: convert the identifier to snake case: `socio_id`
+
+warning: variable `numeroCredito` should have a snake case name
+  --> src\modules\deuda\presentation.rs:37:5
+   |
+37 |     numeroCredito: String,
+   |     ^^^^^^^^^^^^^ help: convert the identifier to snake case: `numero_credito`
+
+warning: variable `numeroCuota` should have a snake case name
+  --> src\modules\deuda\presentation.rs:38:5
+   |
+38 |     numeroCuota: i64,
+   |     ^^^^^^^^^^^ help: convert the identifier to snake case: `numero_cuota`
+
+warning: `bankomunales` (lib) generated 16 warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.30s

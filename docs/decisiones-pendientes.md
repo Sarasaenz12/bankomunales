@@ -577,3 +577,174 @@ pantalla, no como bloqueo. Sólo cuentan los socios **activos**: un socio retira
 `tiene_credito_vigente()` están declarados en `Socio` con `todo!()`, sin lógica provisional y sin
 que ningún comando Tauri los invoque. Devolver 0 o el total habría sido una respuesta plausible
 pero falsa, y las Liquidaciones se calcularían mal sin que nadie lo note.
+
+---
+
+## D-20: Reparto de Ganancias — Balance Neto y el Pasivo que cuadra (RF-41 y RF-91)
+
+**Estado:** Confirmado por el cliente (2026-08-20), a partir de las preguntas sobre RF-40/RF-41.
+
+**a) El Balance de Gestión Neto resta los "Otros Egresos" del mes, y sólo el código EG.**
+RF-41 sólo hablaba de restar los fondos. El cliente confirmó que el balance neto es:
+
+```
+Ingresos repartibles (OR + MO + OI)
+− Otros Egresos del mes (código EG)
+− Fondo de Incobrables (RN-08, % de las ganancias, con tope)
+− Fondo de Gastos (RN-07, % de las ganancias)
+= Balance de Gestión Mensual Neto
+```
+
+El egreso con código **GBK NO se resta**: ya salió del Fondo de Gastos (RF-86), restarlo
+también de los ingresos repartibles lo contaría dos veces. *Ejemplo confirmado por el cliente:*
+con un balance bruto de $41.000 y 76 acciones activas, la ganancia por acción es 41.000 ÷ 76 =
+**539,47**. Se actualizó RF-41 en el Documento de Entendimiento.
+
+**b) Los fondos se retienen ajustando saldos, sin asiento IFG en el Libro.**
+La retención del mes al Fondo de Gastos y al Fondo de Incobrables no mueve dinero físico: la
+plata ya está en la caja. El Cierre sólo incrementa los saldos en `configuracion`
+(`saldo_fondo_gastos`, `saldo_fondo_incobrables`) y **no** registra asiento IFG en
+`movimiento_libro`. Los IFG quedan reservados a donaciones voluntarias al fondo (RF-87). Si se
+registrara un IFG automático, el cierre cambiaría la caja y el saldo del Libro sin que hubiera
+operación real alguna.
+
+**c) Los bienes son Activo Fijo, no Pasivo — su compra es una permuta dentro del Activo.**
+_(Corregido el 2026-08-20; reemplaza la versión anterior, que sumaba los bienes al Pasivo.)_
+
+La identidad contable es `Activo = Pasivo + Patrimonio`, y los **bienes jamás van al Pasivo**.
+El error original venía de una partida incompleta: al comprar un bien se aumentaba `bienes`
+(Activo) pero **no se restaba de la Caja**, así que el Activo crecía solo. Para "cuadrar" se
+sumaba `bienes` al Pasivo, lo que ocultaba el descuadre pero violaba la ecuación fundamental.
+
+La corrección es registrar la partida doble en la compra de un bien **propio**: sale dinero del
+Activo Circulante (Caja) y entra al Activo No Circulante (Bienes). El Activo Total queda igual,
+la Caja **sí baja**, y el Pasivo/Patrimonio no se altera:
+
+```
+ACTIVO                          PASIVO + PATRIMONIO
+  Caja / Disponible               Fondo de Gastos           (pasivo, retenido)
+  Cartera de Créditos             Fondo de Incobrables      (pasivo, retenido)
+  Bienes / Activo Fijo (PROPIO)   Ganancias no repartidas   (patrimonio, PENDIENTE+LIBERADA)
+                                  Capital en acciones       (patrimonio, lotes activos)
+
+Pasivo = capital en acciones
+       + saldo del Fondo de Gastos
+       + saldo del Fondo de Incobrables
+       + ganancias no repartidas (PENDIENTE + LIBERADA, D-12/D-13)   ← SIN bienes
+```
+
+Reglas del flujo corregido:
+
+- **Bien propio con valor:** `registrar_bien()` asienta un egreso con código nuevo **CAF**
+  (Compra de Activo Fijo) por el valor del bien. La Caja baja; el activo fijo sube el mismo
+  monto (permuta, neta cero). CAF **no** es "Otro Egreso" (EG): no reduce la ganancia repartible
+  ni el Fondo de Gastos — no es un gasto, es un cambio de un activo por otro.
+- **Bien en comodato:** es de un tercero (prestado, no comprado). No toca la Caja y **no** cuenta
+  como Activo propio en el Balance; sólo queda registrado como memorando. Por eso las consultas
+  de valor de bienes (KPI de activo fijo y columna `bienes` del cuadre) filtran `tipo = 'PROPIO'`.
+
+El cuadre sigue siendo **informativo**: el sistema muestra si cuadra o no y el cierre se ejecuta
+igualmente (D-20 no introduce regla de negocio nueva).
+
+> **Migración de datos:** los bienes propios registrados **antes** de esta corrección no bajaron
+> la Caja (no tienen asiento CAF). En una base con esos datos el Activo quedará sobrevaluado por
+> su valor y el cuadre marcará "NO CUADRA" hasta compensarlo (registrar el egreso CAF retroactivo
+> o partir de datos limpios). No se automatiza aquí para no arriesgar doble conteo con bienes que
+> ya se hubieran cargado como gasto GBK.
+
+**Implementado (2026-08-20) en el módulo de Cierre de Mes:**
+
+- `reparto_ganancias.otros_egresos` (migración v7) guarda los otros egresos del mes, para que el
+  histórico del reparto no cambie si se corrige un cierre posterior.
+- `calcular_reparto()` en `cierre/domain.rs` implementa la fórmula (a), respetando el tope del
+  Fondo de Incobrables (D-11) y el mínimo de 5% (D-15c).
+- El cierre retiene los fondos ajustando `configuracion` (b) y calcula el cuadre con el Pasivo
+  **sin bienes** (c) en `previsualizar_cuadre()` y `ejecutar_cierre()`.
+- `CodigoOperacion::CompraActivoFijo` (CAF) en `caja/domain.rs`; `registrar_bien()` en
+  `caja/application.rs` asienta el egreso CAF sólo para bienes PROPIO con valor. Las consultas
+  `BienPort::valor_total` y `BienesCierrePort::valor_total_hasta` filtran `tipo = 'PROPIO'`.
+
+---
+
+## D-21: Reparto anual y Liquidación Final del Bankomunal (RF-39 a RF-42, RF-28)
+
+**Estado:** Confirmado por el cliente (2026-08-20), a partir de dos Excel reales (OPENBANK y
+Bankordillera).
+
+**a) Vista de reparto anual por cohorte (RF-39 a RF-42).** El reparto mensual (D-20) ya devenga a
+cada lote activo la ganancia del mes. La nueva "hoja" anual (comando `reparto_anual`, pestaña
+**Reparto Anual** del Cierre y también en Acciones) toma un mes de compra (cohorte) y muestra la
+ganancia por acción mes a mes durante los 12 meses de la ventana (mes de compra + 11), su
+**acumulado** (= columna TOTAL del Excel, p. ej. 3.185/acción para julio) y el pago por socio
+(acciones × devengo). Los meses con balance negativo **restan** del acumulado (octubre −171). Es
+sólo lectura; no toca datos.
+
+**b) Liquidación Final del Bankomunal = disolución (módulo `liquidacion`).** Distinta del reparto
+mensual y del retiro individual (RF-28, aún pendiente): reparte **todo** el patrimonio entre los
+socios y cierra el Banko. Fórmula confirmada contra la hoja "LIQUIDACIÓN FINAL" de Bankordillera:
+
+```
+fondo de crédito = créditos por cobrar + caja
+fondo sano       = fondo de crédito − incobrables (créditos vencidos castigados)
+capital real     = fondo sano − reserva de gastos − reserva de incobrables
+ganancia general = capital real − (acciones activas × nominal)
+ganancia/acción  = ganancia general ÷ total de acciones con ganancia   (piso a peso)
+por socio:
+  valor a pagar  = (caps activas × nominal) + (caps ganancia × ganancia/acción) − crédito
+```
+
+Si el crédito supera los ingresos, el `valor a pagar` es negativo: el socio **queda debiendo**.
+Los "caps con ganancia" pueden superar a las activas (un socio retirado dentro del período con
+ganancia por cobrar y 0 acciones activas, como Fernando Correa en el ejemplo), por eso son
+editables. Los ajustes de la Asamblea (incobrables, % de los dos fondos) llegan editables:
+`preparar_liquidacion_final` prellena caja, créditos por socio y acciones por socio del sistema;
+`calcular_liquidacion_final` hace el cálculo puro (test `reproduce_la_liquidacion_de_bankordillera`
+cuadra al peso: ganancia general 4.257.350, 3.158/acción, Oliva 568.432, Daniel −184.204). Es sólo
+un cálculo con actas imprimibles por socio; **no mueve dinero ni cierra el Banko** todavía.
+
+**c) Liquidación de un socio (retiro, RF-28) — cálculo + acta + RF-29/30.** La pestaña "De un
+socio" calcula su retiro: capital (acciones × nominal) + ganancia devengada (RN-10, de
+`ganancia_pendiente_de_socio`) − deuda vigente. **RF-29/30 implementado**: `CreditoService::
+acciones_comprometidas_de_socio` suma las acciones que el socio tiene comprometidas como garantía
+de créditos VIGENTES (titular o fiador); la pantalla muestra acciones libres = activas −
+comprometidas y **bloquea** liquidar más de las libres (retiro total bloqueado si hay
+comprometidas). Sigue siendo **cálculo, no posteo**.
+
+**d) Reparto de Ganancias (RF-42) — pantalla nueva.** En Acciones → Reparto de Ganancias:
+desglose de la ganancia/acción del mes (`previsualizar_cierre`), buscador de socio + tabla de quién
+cumple el año (`resumen_pagos_ganancias`) con estado Pagada/Pendiente/Próximo, modal de historial
+mes a mes por cohorte (`reparto_anual`) y liquidación individual (`pagar_ganancias_de_socio`) o de
+todos (`pagar_ganancias_cumplidas`). Cada pago asienta UR en el Libro y queda en Auditoría.
+
+**Pendiente (bloqueado por otros módulos):** el **posteo** de la liquidación (marcar lote
+`liquidada`, asentar LC de capital, cambiar estatus del socio) y el **descuento real de deuda** —
+tanto en el retiro como en la disolución— necesitan el subsistema de pago de cuotas + mora
+(RF-63 a RF-79), que aún no existe. RF-30 se valida hoy en la UI del cálculo; su refuerzo en el
+backend va cuando se implemente el posteo.
+
+---
+
+## D-22: Servicio de la Deuda — pago de cuotas (RF-63 a RF-72, Fase 1)
+
+**Estado:** Confirmado por el cliente (2026-08-20). Módulo nuevo `deuda` (monolito modular).
+
+Decisiones confirmadas:
+1. **Mora sobre la cuota** (no sobre el saldo): `mora = valor_cuota × (tasa_mora/100)/30 × días_atraso`
+   (tasa mensual prorrateada por día; `tasa_interes_mora` de configuración, 5% por defecto).
+2. **Cascada de imputación:** un pago cubre primero **mora**, luego **interés**, luego **capital**.
+3. **Abono parcial permitido:** la tabla `cuota` ya guarda `capital_pagado`/`interes_pagado`/
+   `mora_pagada`; `pagada` es un derivado de que capital e interés estén cubiertos.
+
+**Implementado (Fase 1):**
+- Módulo `deuda`: `domain.rs` (puro: `mora_de_cuota`, `dias_atraso`, `aplicar_pago`, `total_debido`,
+  `cuota_saldada`, con tests), `data.rs`, `application.rs` (`DeudaService`), `presentation.rs`.
+- El pago actualiza cuota + crédito en **una transacción** y asienta cada concepto por Caja con su
+  código: **OR** (interés), **PC** (capital), **MO** (mora). El crédito pasa a `PAGADO` al llegar a
+  saldo 0. Queda en Auditoría (`PAGO_CUOTA`).
+- Frontend: pestaña **Créditos → Pago** (`PagoCuotaTab`): buscar por Nº, ver cuotas con estado
+  (Pagada/Vencida/Pendiente + días de atraso), pagar con mora estimada y ver el desglose aplicado.
+- **Sin migración**: el esquema de `cuota` ya soportaba pagos parciales y mora.
+
+**Pendiente (fases siguientes):** Fase 2 "socio en mora" (derivado de cuotas vencidas) → desbloquea
+el descuento de mora en ganancias y la deuda real en liquidación; Fase 3 PDP (RF-73..76); Fase 4
+COR/refinanciamiento (RF-77..82).

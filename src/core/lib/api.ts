@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
+import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import {
     Bankomunal, NuevoBankomunal, Configuracion, DatosGenerales,
 } from '../types';
@@ -14,135 +14,326 @@ import {
     NuevaSolicitud, SolicitudCredito, DecisionSolicitud, NuevoDesembolso,
     Credito, TablaCredito, EstadoSolicitud,
 } from '../../features/creditos/types';
+import {
+    CierreMes, DesgloseRepartoMes, DetalleCierre, FilaPagoGanancia, PagoGananciaRegistrado,
+    PrevisualizacionCierre, RepartoAnual, ResultadoCierre,
+} from '../../features/cierre/types';
+import {
+    DatosLiquidacion, DatosLiquidacionSocio, DestinoLiquidacionParcial, LiquidacionFinal,
+    ParametrosLiquidacion, PreviewLiquidacionParcial, ResultadoLiquidacionParcial, SocioLiquidacion,
+} from '../../features/liquidacion/types';
+import { EstadoCreditoDeuda, ResultadoAbono, ResultadoPago, SocioDeudor } from '../../features/deuda/types';
+import { RegistroRespaldo } from '../../features/respaldo/types';
+import {
+    ReporteSocioActivo, ReporteGestionFila, ReporteFiadorFila, ReporteCreditoFila,
+    ReporteLibroFila, ReporteAccionFila, ReporteBalanceActual,
+} from '../../features/reportes/types';
+
+/**
+ * Error de dominio del backend. Se serializa como `{ code, message }`:
+ * `code` es estable y permite ramificar por tipo (p. ej. `NOMBRE_DUPLICADO`);
+ * `message` es el texto legible. `toString()` devuelve el mensaje para conservar
+ * la compatibilidad con el código que ya hace `err?.toString()`.
+ */
+export class AppError {
+    constructor(
+        public readonly code: string,
+        public readonly message: string,
+    ) {}
+    toString(): string {
+        return this.message;
+    }
+}
+
+/**
+ * Deja el mensaje listo para mostrarse al usuario: quita las referencias internas de
+ * reglamento —(RN-03), (RF-56), (D-02), (RNF-08)…— y pone separador de miles a los montos
+ * (`$2000000.00` → `$2.000.000`), sin centavos.
+ */
+function limpiarMensaje(m: string): string {
+    return m
+        .replace(/\s*\((?:RN|RF|RNF|D)-[\d/]+(?:\s*,\s*(?:RN|RF|RNF|D)-[\d/]+)*\)/g, '')
+        .replace(/\$\s?(\d+)(?:\.\d+)?/g, (_m, d: string) => '$' + d.replace(/\B(?=(\d{3})+(?!\d))/g, '.'))
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+}
+
+function normalizarError(e: unknown): AppError {
+    if (e && typeof e === 'object' && 'code' in e && 'message' in e) {
+        const o = e as { code: unknown; message: unknown };
+        return new AppError(String(o.code), limpiarMensaje(String(o.message)));
+    }
+    // Compatibilidad con errores que aún llegaran como texto plano.
+    return new AppError('DESCONOCIDO', limpiarMensaje(typeof e === 'string' ? e : String(e)));
+}
+
+/** Envuelve `invoke` para que todo rechazo llegue como `AppError` tipado. */
+function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+    return tauriInvoke<T>(cmd, args).catch((e) => {
+        throw normalizarError(e);
+    });
+}
 
 export const api = {
     // Auth & Bankomunal Selection
     login: (password: string): Promise<boolean> =>
-        invoke('login', { password }),
+        call('login', { password }),
 
     crearBankomunal: (nuevo: NuevoBankomunal): Promise<Bankomunal> =>
-        invoke('crear_bankomunal', { nuevo }),
+        call('crear_bankomunal', { nuevo }),
 
     listarBankomunales: (): Promise<Bankomunal[]> =>
-        invoke('listar_bankomunales'),
+        call('listar_bankomunales'),
 
     unicoBankomunal: (): Promise<Bankomunal | null> =>
-        invoke('unico_bankomunal'),
+        call('unico_bankomunal'),
 
     seleccionarBankomunal: (id: string): Promise<Bankomunal> =>
-        invoke('seleccionar_bankomunal', { id }),
+        call('seleccionar_bankomunal', { id }),
 
     volverASeleccion: (): Promise<void> =>
-        invoke('volver_a_seleccion'),
+        call('volver_a_seleccion'),
 
     bancoSeleccionado: (): Promise<Bankomunal | null> =>
-        invoke('banco_seleccionado'),
+        call('banco_seleccionado'),
+
+    sesionIniciada: (): Promise<boolean> =>
+        call('sesion_iniciada'),
 
     // Configuración
     obtenerConfiguracion: (): Promise<Configuracion> =>
-        invoke('obtener_configuracion'),
+        call('obtener_configuracion'),
 
     actualizarConfiguracion: (configuracion: Configuracion, nombreQuienRealiza: string, motivo: string): Promise<Configuracion> =>
-        invoke('actualizar_configuracion', { configuracion, nombreQuienRealiza, motivo }),
+        call('actualizar_configuracion', { configuracion, nombreQuienRealiza, motivo }),
 
     obtenerDatosGenerales: (): Promise<DatosGenerales> =>
-        invoke('obtener_datos_generales'),
+        call('obtener_datos_generales'),
 
     listarAuditoria: (): Promise<any[]> =>
-        invoke('listar_auditoria'),
+        call('listar_auditoria'),
 
     // Socios (RF-15 a RF-21)
     registrarSocio: (datos: DatosSocio): Promise<Socio> =>
-        invoke('registrar_socio', { datos }),
+        call('registrar_socio', { datos }),
 
     actualizarSocio: (id: string, datos: DatosSocio): Promise<Socio> =>
-        invoke('actualizar_socio', { id, datos }),
+        call('actualizar_socio', { id, datos }),
 
     obtenerSocio: (id: string): Promise<Socio> =>
-        invoke('obtener_socio', { id }),
+        call('obtener_socio', { id }),
 
     buscarSocioPorCedula: (cedula: string): Promise<Socio | null> =>
-        invoke('buscar_socio_por_cedula', { cedula }),
+        call('buscar_socio_por_cedula', { cedula }),
 
     listarSocios: (): Promise<SocioResumen[]> =>
-        invoke('listar_socios'),
+        call('listar_socios'),
 
     cupoSocios: (): Promise<CupoSocios> =>
-        invoke('cupo_socios'),
+        call('cupo_socios'),
 
     // Caja y Contabilidad (RF-83 a RF-90)
     registrarOperacionCaja: (operacion: NuevaOperacion): Promise<Movimiento> =>
-        invoke('registrar_operacion_caja', { operacion }),
+        call('registrar_operacion_caja', { operacion }),
 
     registrarDonacion: (fecha: string, monto: number, descripcion: string): Promise<Movimiento> =>
-        invoke('registrar_donacion', { fecha, monto, descripcion }),
+        call('registrar_donacion', { fecha, monto, descripcion }),
 
     corregirOperacionCaja: (
         id: string, fecha: string, monto: number, descripcion: string,
         nombreQuienRealiza?: string | null, motivo?: string | null,
     ): Promise<Movimiento> =>
-        invoke('corregir_operacion_caja', {
+        call('corregir_operacion_caja', {
             id, fecha, monto, descripcion,
             nombreQuienRealiza: nombreQuienRealiza ?? null,
             motivo: motivo ?? null,
         }),
 
     listarLibro: (filtro?: FiltroLibro): Promise<Movimiento[]> =>
-        invoke('listar_libro', { filtro: filtro ?? null }),
+        call('listar_libro', { filtro: filtro ?? null }),
 
     resumenCaja: (): Promise<ResumenCaja> =>
-        invoke('resumen_caja'),
+        call('resumen_caja'),
 
     registrarBien: (bien: NuevoBien): Promise<Bien> =>
-        invoke('registrar_bien', { bien }),
+        call('registrar_bien', { bien }),
 
     listarBienes: (): Promise<Bien[]> =>
-        invoke('listar_bienes'),
+        call('listar_bienes'),
 
     // Acciones (RF-22 a RF-27)
     previsualizarCompraAcciones: (socioId: string, monto: number): Promise<CalculoCompra> =>
-        invoke('previsualizar_compra_acciones', { socioId, monto }),
+        call('previsualizar_compra_acciones', { socioId, monto }),
 
     registrarCompraAcciones: (compra: NuevaCompra): Promise<LoteAcciones> =>
-        invoke('registrar_compra_acciones', { compra }),
+        call('registrar_compra_acciones', { compra }),
 
     accionesDeSocio: (socioId: string): Promise<number> =>
-        invoke('acciones_de_socio', { socioId }),
+        call('acciones_de_socio', { socioId }),
 
     accionesPorSocio: (): Promise<AccionesDeSocio[]> =>
-        invoke('acciones_por_socio'),
+        call('acciones_por_socio'),
 
     totalAcciones: (): Promise<number> =>
-        invoke('total_acciones'),
+        call('total_acciones'),
 
     historialAccionesSocio: (socioId: string): Promise<ResumenMesAcciones[]> =>
-        invoke('historial_acciones_socio', { socioId }),
+        call('historial_acciones_socio', { socioId }),
 
     cupoDelMes: (fecha?: string): Promise<CupoMensual> =>
-        invoke('cupo_del_mes', { fecha: fecha ?? null }),
+        call('cupo_del_mes', { fecha: fecha ?? null }),
 
     // Créditos (RF-43 a RF-62)
     previsualizarTablaCredito: (monto: number, plazo: number): Promise<TablaCredito> =>
-        invoke('previsualizar_tabla_credito', { monto, plazo }),
+        call('previsualizar_tabla_credito', { monto, plazo }),
 
     registrarSolicitud: (solicitud: NuevaSolicitud): Promise<SolicitudCredito> =>
-        invoke('registrar_solicitud', { solicitud }),
+        call('registrar_solicitud', { solicitud }),
 
     decidirSolicitud: (decision: DecisionSolicitud): Promise<SolicitudCredito> =>
-        invoke('decidir_solicitud', { decision }),
+        call('decidir_solicitud', { decision }),
 
     listarSolicitudes: (estado?: EstadoSolicitud | null): Promise<SolicitudCredito[]> =>
-        invoke('listar_solicitudes', { estado: estado ?? null }),
+        call('listar_solicitudes', { estado: estado ?? null }),
 
     listarSolicitudesDesembolsables: (): Promise<SolicitudCredito[]> =>
-        invoke('listar_solicitudes_desembolsables'),
+        call('listar_solicitudes_desembolsables'),
 
     previsualizarDesembolso: (monto: number, plazo: number): Promise<TablaCredito> =>
-        invoke('previsualizar_desembolso', { monto, plazo }),
+        call('previsualizar_desembolso', { monto, plazo }),
 
     registrarDesembolso: (desembolso: NuevoDesembolso): Promise<Credito> =>
-        invoke('registrar_desembolso', { desembolso }),
+        call('registrar_desembolso', { desembolso }),
 
     buscarCreditoPorSolicitud: (solicitudId: string): Promise<Credito | null> =>
-        invoke('buscar_credito_por_solicitud', { solicitudId }),
+        call('buscar_credito_por_solicitud', { solicitudId }),
+
+    siguienteNumeroCredito: (): Promise<string> =>
+        call('siguiente_numero_credito'),
+
+    listarCreditos: (): Promise<Credito[]> =>
+        call('listar_creditos'),
+
+    creditosDeSocio: (socioId: string): Promise<Credito[]> =>
+        call('creditos_de_socio', { socioId }),
+
+    creditosQueAvalaSocio: (socioId: string): Promise<Credito[]> =>
+        call('creditos_que_avala_socio', { socioId }),
+
+    registrarRefinanciamiento: (refinanciamiento: any): Promise<Credito> =>
+        call('registrar_refinanciamiento', { refinanciamiento }),
+
+    // Cierre de Mes (RF-91 a RF-97) y Reparto de Ganancias (RF-39 a RF-42)
+    previsualizarCierre: (mes: string): Promise<PrevisualizacionCierre> =>
+        call('previsualizar_cierre', { mes }),
+
+    desgloseRepartoMes: (mes: string): Promise<DesgloseRepartoMes> =>
+        call('desglose_reparto_mes', { mes }),
+
+    ejecutarCierre: (mes: string, nombreQuienRealiza: string): Promise<ResultadoCierre> =>
+        call('ejecutar_cierre', { mes, nombreQuienRealiza }),
+
+    listarCierres: (): Promise<CierreMes[]> =>
+        call('listar_cierres'),
+
+    detalleCierre: (id: string): Promise<DetalleCierre> =>
+        call('detalle_cierre', { id }),
+
+    repartoAnual: (mes: string): Promise<RepartoAnual> =>
+        call('reparto_anual', { mes }),
+
+    pagarGananciasCumplidas: (fecha: string): Promise<PagoGananciaRegistrado[]> =>
+        call('pagar_ganancias_cumplidas', { fecha }),
+
+    resumenPagosGanancias: (fecha: string): Promise<FilaPagoGanancia[]> =>
+        call('resumen_pagos_ganancias', { fecha }),
+
+    pagarGananciasDeSocio: (socioId: string, fecha: string): Promise<PagoGananciaRegistrado[]> =>
+        call('pagar_ganancias_de_socio', { socioId, fecha }),
+
+    // Liquidación Final del Bankomunal (disolución)
+    prepararLiquidacionFinal: (): Promise<DatosLiquidacion> =>
+        call('preparar_liquidacion_final'),
+
+    calcularLiquidacionFinal: (
+        parametros: ParametrosLiquidacion,
+        socios: SocioLiquidacion[],
+    ): Promise<LiquidacionFinal> =>
+        call('calcular_liquidacion_final', { parametros, socios }),
+
+    prepararLiquidacionSocio: (socioId: string): Promise<DatosLiquidacionSocio> =>
+        call('preparar_liquidacion_socio', { socioId }),
+
+    ejecutarRetiroSocio: (datos: { socio_id: string; fecha: string }): Promise<void> =>
+        call('ejecutar_retiro_socio', { datos }),
+
+    previsualizarLiquidacionParcial: (
+        socioId: string, cantidad: number, fecha: string,
+    ): Promise<PreviewLiquidacionParcial> =>
+        call('previsualizar_liquidacion_parcial', { socioId, cantidad, fecha }),
+
+    ejecutarLiquidacionParcial: (datos: {
+        socio_id: string; cantidad: number; fecha: string; destino: DestinoLiquidacionParcial;
+    }): Promise<ResultadoLiquidacionParcial> =>
+        call('ejecutar_liquidacion_parcial', { datos }),
+
+    listarRetiradosConDeuda: (): Promise<SocioDeudor[]> =>
+        call('listar_retirados_con_deuda'),
+
+    registrarPagoDeudaPendiente: (datos: { socio_id: string; fecha: string; monto: number }): Promise<number> =>
+        call('registrar_pago_deuda_pendiente', { datos }),
+
+    // Servicio de la Deuda (pago de cuotas, RF-63..72)
+    estadoCreditoDeuda: (numero: string): Promise<EstadoCreditoDeuda> =>
+        call('estado_credito_deuda', { numero }),
+
+    registrarPagoCuota: (
+        numeroCredito: string,
+        numeroCuota: number,
+        fecha: string,
+        monto: number,
+    ): Promise<ResultadoPago> =>
+        call('registrar_pago_cuota', { numeroCredito, numeroCuota, fecha, monto }),
+
+    /** Pago de una o varias cuotas: un solo interés (el del mes) + mora + capital de las N cuotas. */
+    pagarCuotas: (
+        numeroCredito: string,
+        fecha: string,
+        cantidad: number,
+    ): Promise<ResultadoPago> =>
+        call('pagar_cuotas', { numeroCredito, fecha, cantidad }),
+
+    /** Abono a capital: baja el saldo y re-amortiza las cuotas pendientes. */
+    abonarCapital: (
+        numeroCredito: string,
+        fecha: string,
+        monto: number,
+    ): Promise<ResultadoAbono> =>
+        call('abonar_capital', { numeroCredito, fecha, monto }),
+
+    // Respaldo y restauración (RF-113)
+    listarRespaldos: (): Promise<RegistroRespaldo[]> =>
+        call('listar_respaldos_cmd'),
+
+    crearRespaldo: (destinoRuta: string, usuario: string): Promise<void> =>
+        call('crear_respaldo_cmd', { destinoRuta, usuario }),
+
+    restaurarRespaldo: (origenRuta: string, usuario: string): Promise<void> =>
+        call('restaurar_respaldo_cmd', { origenRuta, usuario }),
+
+    // Reportes (RF-98..RF-111)
+    reporteSociosActivos: (): Promise<ReporteSocioActivo[]> =>
+        call('reporte_socios_activos'),
+    reporteGestion: (): Promise<ReporteGestionFila[]> =>
+        call('reporte_gestion'),
+    reporteFiadores: (): Promise<ReporteFiadorFila[]> =>
+        call('reporte_fiadores'),
+    reporteCreditos: (): Promise<ReporteCreditoFila[]> =>
+        call('reporte_creditos'),
+    reporteLibro: (): Promise<ReporteLibroFila[]> =>
+        call('reporte_libro'),
+    reporteAcciones: (): Promise<ReporteAccionFila[]> =>
+        call('reporte_acciones'),
+    reporteBalance: (): Promise<ReporteBalanceActual> =>
+        call('reporte_balance'),
 };

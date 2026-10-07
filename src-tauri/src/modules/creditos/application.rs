@@ -3,13 +3,13 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::core::error::AppError;
+use crate::core::format::pesos;
 
 use super::domain::{
     calcular_tabla, resumir_tabla, Credito, CreditoPort, DecisionSolicitud, EstadoCredito,
     EstadoSolicitud, GarantiaCredito, GarantiaSolicitud, LibroContablePort, NuevaSolicitud,
-    NuevoDesembolso, ParametrosCredito, ParametrosCreditoPort, RolGarantia,
-    SociosParaCreditoPort, SolicitudCredito, SolicitudPort, FRECUENCIA_PAGO_MENSUAL,
-    MAX_FIADORES,
+    NuevoDesembolso, NuevoRefinanciamiento, ParametrosCredito, ParametrosCreditoPort, RolGarantia,
+    SociosParaCreditoPort, SolicitudCredito, SolicitudPort, FRECUENCIA_PAGO_MENSUAL, MAX_FIADORES,
 };
 
 /// Capa de Aplicación/Servicios del módulo de Créditos, Fase 1.
@@ -35,7 +35,72 @@ impl CreditoService {
         socios: Arc<dyn SociosParaCreditoPort>,
         libro: Arc<dyn LibroContablePort>,
     ) -> Self {
-        Self { solicitudes, creditos, parametros, acciones, socios, libro }
+        Self {
+            solicitudes,
+            creditos,
+            parametros,
+            acciones,
+            socios,
+            libro,
+        }
+    }
+
+    /// Saldo pendiente de crédito por socio (créditos VIGENTES), insumo de la
+    /// Liquidación Final del Bankomunal: la deuda que se le descuenta a cada socio.
+    pub fn saldos_vigentes_por_socio(
+        &self,
+        banco_id: &str,
+    ) -> Result<Vec<(String, f64)>, AppError> {
+        let creditos = self.creditos.listar(banco_id)?;
+        let mut acc: Vec<(String, f64)> = Vec::new();
+        for c in creditos
+            .iter()
+            .filter(|c| c.estatus == EstadoCredito::Vigente)
+        {
+            match acc.iter_mut().find(|(id, _)| *id == c.socio_id) {
+                Some((_, s)) => *s += c.saldo_pendiente,
+                None => acc.push((c.socio_id.clone(), c.saldo_pendiente)),
+            }
+        }
+        Ok(acc)
+    }
+
+    /// RF-29 (RN-06): acciones de un socio comprometidas como garantía de créditos
+    /// VIGENTES, sea como titular o como fiador. Son las que **no** se pueden liquidar
+    /// mientras el crédito siga vivo (RF-30). Las libres = activas − comprometidas.
+    pub fn acciones_comprometidas_de_socio(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+    ) -> Result<f64, AppError> {
+        let creditos = self.creditos.listar(banco_id)?;
+        let total = creditos
+            .iter()
+            .filter(|c| c.estatus == EstadoCredito::Vigente)
+            .flat_map(|c| c.garantias.iter())
+            .filter(|g| g.socio_id == socio_id)
+            .map(|g| g.acciones_comprometidas)
+            .sum();
+        Ok(total)
+    }
+
+    /// Retorna sólo las acciones comprometidas como Fiador.
+    /// Un socio titular puede retirar sus acciones pagando su deuda, pero
+    /// no puede retirarse si es fiador de un tercero cuyo crédito está vigente.
+    pub fn acciones_comprometidas_como_fiador(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+    ) -> Result<f64, AppError> {
+        let creditos = self.creditos.listar(banco_id)?;
+        let total = creditos
+            .iter()
+            .filter(|c| c.estatus == EstadoCredito::Vigente)
+            .flat_map(|c| c.garantias.iter())
+            .filter(|g| g.socio_id == socio_id && g.rol == super::domain::RolGarantia::Fiador)
+            .map(|g| g.acciones_comprometidas)
+            .sum();
+        Ok(total)
     }
 
     /// RF-46 (CU-08): vista previa de la tabla de amortización que la pantalla de
@@ -72,8 +137,8 @@ impl CreditoService {
         }
         if nueva.monto_solicitado > p.monto_maximo_credito {
             return Err(AppError::OperacionNoPermitida(format!(
-                "El monto solicitado (${:.2}) supera el máximo del Bankomunal (${:.2})",
-                nueva.monto_solicitado, p.monto_maximo_credito
+                "El monto solicitado (${}) supera el máximo del Bankomunal (${})",
+                pesos(nueva.monto_solicitado), pesos(p.monto_maximo_credito)
             )));
         }
         if nueva.plazo_cuotas < 1 {
@@ -89,12 +154,12 @@ impl CreditoService {
         }
         if nueva.fiadores.is_empty() {
             return Err(AppError::OperacionNoPermitida(
-                "Todo crédito debe tener al menos un fiador (RN-14)".into(),
+                "Todo crédito debe tener al menos un fiador".into(),
             ));
         }
         if nueva.fiadores.len() > MAX_FIADORES {
             return Err(AppError::OperacionNoPermitida(format!(
-                "Se registran hasta {MAX_FIADORES} fiadores por solicitud (RF-48)"
+                "Se registran hasta {MAX_FIADORES} fiadores por solicitud"
             )));
         }
 
@@ -123,14 +188,27 @@ impl CreditoService {
             fiadores_socios.push(socio_id);
         }
 
+        // RN-05 (RF-58): sin fiadores cruzados. Un fiador propuesto no puede ser, en otro
+        // crédito o solicitud activa, el TITULAR de un crédito afianzado por nuestro titular
+        // (se estarían afianzando mutuamente).
+        let cruzados = self.pares_titular_fiador_activos(banco_id)?;
+        for fiador_id in &fiadores_socios {
+            if cruzados.contains(&(fiador_id.clone(), nueva.socio_id.clone())) {
+                return Err(AppError::OperacionNoPermitida(
+                    "No se permiten fiadores cruzados: el fiador y el solicitante ya se \
+                     respaldan mutuamente en otro crédito.".into(),
+                ));
+            }
+        }
+
         // RN-03 (RF-56): relación 1 a 5 con las acciones propias del socio.
         let acciones_titular = self.acciones.acciones_de_socio(banco_id, &nueva.socio_id)? as f64;
         let tope_rn03 = 5.0 * acciones_titular * p.valor_nominal;
         if nueva.monto_solicitado > tope_rn03 {
             return Err(AppError::OperacionNoPermitida(format!(
-                "El monto solicitado (${:.2}) supera 5 veces las acciones propias del socio \
-                 (${tope_rn03:.2} = {acciones_titular:.0} acciones × ${:.2} × 5) (RN-03)",
-                nueva.monto_solicitado, p.valor_nominal
+                "El monto solicitado (${}) supera 5 veces las acciones propias del socio \
+                 (${} = {acciones_titular:.0} acciones × ${} × 5)",
+                pesos(nueva.monto_solicitado), pesos(tope_rn03), pesos(p.valor_nominal)
             )));
         }
 
@@ -143,7 +221,13 @@ impl CreditoService {
             .zip(fiadores_socios.iter())
             .map(|(f, sid)| (sid.clone(), f.acciones_comprometidas))
             .collect::<Vec<_>>();
-        self.verificar_garantia_minima(banco_id, &p, &nueva.socio_id, nueva.monto_solicitado, &fiadores_por_socio)?;
+        self.verificar_garantia_minima(
+            banco_id,
+            &p,
+            &nueva.socio_id,
+            nueva.monto_solicitado,
+            &fiadores_por_socio,
+        )?;
 
         let fecha = hoy();
         let solicitud = SolicitudCredito {
@@ -204,7 +288,11 @@ impl CreditoService {
                 "La solicitud indicada no existe".into(),
             ))?;
 
-        if self.creditos.buscar_por_solicitud(banco_id, &solicitud.id)?.is_some() {
+        if self
+            .creditos
+            .buscar_por_solicitud(banco_id, &solicitud.id)?
+            .is_some()
+        {
             return Err(AppError::OperacionNoPermitida(
                 "La solicitud ya tiene un crédito desembolsado".into(),
             ));
@@ -219,16 +307,22 @@ impl CreditoService {
         let monto_maximo = self.parametros.obtener(banco_id)?.monto_maximo_credito;
         match decision.decision {
             EstadoSolicitud::Diferida => {
-                if decision.observacion.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                if decision
+                    .observacion
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty()
+                {
                     return Err(AppError::OperacionNoPermitida(
-                        "Una solicitud Diferida debe registrar la observación (RF-51)".into(),
+                        "Una solicitud Diferida debe registrar la observación".into(),
                     ));
                 }
             }
             EstadoSolicitud::Modificada => {
                 let monto = decision.monto_aprobado.ok_or_else(|| {
                     AppError::OperacionNoPermitida(
-                        "Una solicitud Modificada debe indicar el monto aprobado (RF-51)".into(),
+                        "Una solicitud Modificada debe indicar el monto aprobado".into(),
                     )
                 })?;
                 if monto <= 0.0 {
@@ -238,8 +332,9 @@ impl CreditoService {
                 }
                 if monto > monto_maximo {
                     return Err(AppError::OperacionNoPermitida(format!(
-                        "El monto aprobado (${monto:.2}) supera el máximo del Bankomunal \
-                         (${monto_maximo:.2})"
+                        "El monto aprobado (${}) supera el máximo del Bankomunal (${})",
+                        pesos(monto),
+                        pesos(monto_maximo)
                     )));
                 }
             }
@@ -260,7 +355,9 @@ impl CreditoService {
 
         solicitud.estado = decision.decision;
         solicitud.monto_aprobado = match decision.decision {
-            EstadoSolicitud::Aprobada => decision.monto_aprobado.or(Some(solicitud.monto_solicitado)),
+            EstadoSolicitud::Aprobada => {
+                decision.monto_aprobado.or(Some(solicitud.monto_solicitado))
+            }
             EstadoSolicitud::Modificada => decision.monto_aprobado,
             _ => None,
         };
@@ -268,7 +365,8 @@ impl CreditoService {
         solicitud.fecha_decision = Some(hoy());
         solicitud.decidida_por = Some(decision.decidida_por);
 
-        self.solicitudes.actualizar(banco_id, &solicitud, &solicitud.garantias)?;
+        self.solicitudes
+            .actualizar(banco_id, &solicitud, &solicitud.garantias)?;
         Ok(solicitud)
     }
 
@@ -279,6 +377,49 @@ impl CreditoService {
         estado: Option<EstadoSolicitud>,
     ) -> Result<Vec<SolicitudCredito>, AppError> {
         self.solicitudes.listar_por_estado(banco_id, estado)
+    }
+
+    /// Listado de todos los créditos.
+    pub fn listar_creditos(&self, banco_id: &str) -> Result<Vec<Credito>, AppError> {
+        self.creditos.listar(banco_id)
+    }
+
+    /// Créditos en los que el socio es TITULAR (deudor), del más reciente al más antiguo.
+    /// Alimenta la pestaña "Historial de Créditos" del detalle del socio (RF-19).
+    pub fn creditos_de_socio(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+    ) -> Result<Vec<Credito>, AppError> {
+        let mut creditos: Vec<Credito> = self
+            .creditos
+            .listar(banco_id)?
+            .into_iter()
+            .filter(|c| c.socio_id == socio_id)
+            .collect();
+        creditos.sort_by(|a, b| b.fecha_desembolso.cmp(&a.fecha_desembolso));
+        Ok(creditos)
+    }
+
+    /// Créditos de terceros en los que el socio figura como FIADOR (RF-48, RN-04).
+    /// Alimenta la pestaña "Créditos que avala" del detalle del socio (RF-19).
+    pub fn creditos_que_avala(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+    ) -> Result<Vec<Credito>, AppError> {
+        let mut creditos: Vec<Credito> = self
+            .creditos
+            .listar(banco_id)?
+            .into_iter()
+            .filter(|c| {
+                c.garantias
+                    .iter()
+                    .any(|g| g.socio_id == socio_id && g.rol == RolGarantia::Fiador)
+            })
+            .collect();
+        creditos.sort_by(|a, b| b.fecha_desembolso.cmp(&a.fecha_desembolso));
+        Ok(creditos)
     }
 
     /// RF-52/RF-54: listado de solicitudes aprobadas aún SIN desembolso, para que
@@ -345,85 +486,85 @@ impl CreditoService {
         let fecha = fecha_o_hoy(nuevo.fecha.as_deref())?;
 
         // Origen del desembolso: solicitud aprobada o carga directa.
-        let (solicitud, garantias_origen, monto, plazo) =
-            match &nuevo.solicitud_id {
-                Some(sid) => {
-                    let sol = self.solicitudes.buscar_por_id(banco_id, sid)?.ok_or_else(|| {
-                        AppError::OperacionNoPermitida(
-                            "La solicitud indicada no existe".into(),
-                        )
+        let (solicitud, garantias_origen, monto, plazo) = match &nuevo.solicitud_id {
+            Some(sid) => {
+                let sol = self
+                    .solicitudes
+                    .buscar_por_id(banco_id, sid)?
+                    .ok_or_else(|| {
+                        AppError::OperacionNoPermitida("La solicitud indicada no existe".into())
                     })?;
-                    if sol.estado != EstadoSolicitud::Aprobada {
-                        return Err(AppError::OperacionNoPermitida(format!(
-                            "Sólo las solicitudes Aprobadas pueden desembolsarse; esta quedó {}",
-                            sol.estado.as_str()
-                        )));
-                    }
-                    if self.creditos.buscar_por_solicitud(banco_id, sid)?.is_some() {
-                        return Err(AppError::OperacionNoPermitida(
-                            "La solicitud ya fue desembolsada".into(),
-                        ));
-                    }
-                    // El monto desembolsado es el aprobado por la Junta (RF-50).
-                    let monto = sol.monto_aprobado.unwrap_or(sol.monto_solicitado);
-                    if (monto - nuevo.monto).abs() > 0.01 {
-                        return Err(AppError::OperacionNoPermitida(
-                            "El monto del desembolso debe coincidir con el aprobado por la Junta"
-                                .into(),
-                        ));
-                    }
-                    let fiadores = sol
-                        .garantias
-                        .iter()
-                        .filter(|g| g.rol == RolGarantia::Fiador)
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    let plazo = sol.plazo_cuotas;
-                    (Some(sol), fiadores, monto, plazo)
+                if sol.estado != EstadoSolicitud::Aprobada {
+                    return Err(AppError::OperacionNoPermitida(format!(
+                        "Sólo las solicitudes Aprobadas pueden desembolsarse; esta quedó {}",
+                        sol.estado.as_str()
+                    )));
                 }
-                None => {
-                    if nuevo.plazo_cuotas < 1 {
-                        return Err(AppError::OperacionNoPermitida(
-                            "El plazo debe ser de al menos 1 cuota".into(),
-                        ));
-                    }
-                    if nuevo.fiadores.is_empty() {
-                        return Err(AppError::OperacionNoPermitida(
-                            "Todo crédito debe tener al menos un fiador (RN-14)".into(),
-                        ));
-                    }
-                    if nuevo.fiadores.len() > MAX_FIADORES {
-                        return Err(AppError::OperacionNoPermitida(format!(
-                            "Se registran hasta {MAX_FIADORES} fiadores (RF-48)"
-                        )));
-                    }
-                    let mut fiadores = Vec::new();
-                    for f in &nuevo.fiadores {
-                        let socio_id = self
-                            .socios
-                            .buscar_por_cedula(banco_id, &f.cedula)?
-                            .ok_or_else(|| {
-                                AppError::OperacionNoPermitida(format!(
-                                    "El fiador con cédula «{}» no es socio del Bankomunal",
-                                    f.cedula
-                                ))
-                            })?;
-                        if socio_id == nuevo.socio_id {
-                            return Err(AppError::OperacionNoPermitida(
-                                "El fiador no puede ser el mismo socio titular".into(),
-                            ));
-                        }
-                        fiadores.push(GarantiaSolicitud {
-                            id: Uuid::new_v4().to_string(),
-                            solicitud_id: String::new(),
-                            socio_id,
-                            rol: RolGarantia::Fiador,
-                            acciones_comprometidas: f.acciones_comprometidas,
-                        });
-                    }
-                    (None, fiadores, nuevo.monto, nuevo.plazo_cuotas)
+                if self.creditos.buscar_por_solicitud(banco_id, sid)?.is_some() {
+                    return Err(AppError::OperacionNoPermitida(
+                        "La solicitud ya fue desembolsada".into(),
+                    ));
                 }
-            };
+                // El monto desembolsado es el aprobado por la Junta (RF-50).
+                let monto = sol.monto_aprobado.unwrap_or(sol.monto_solicitado);
+                if (monto - nuevo.monto).abs() > 0.01 {
+                    return Err(AppError::OperacionNoPermitida(
+                        "El monto del desembolso debe coincidir con el aprobado por la Junta"
+                            .into(),
+                    ));
+                }
+                let fiadores = sol
+                    .garantias
+                    .iter()
+                    .filter(|g| g.rol == RolGarantia::Fiador)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let plazo = sol.plazo_cuotas;
+                (Some(sol), fiadores, monto, plazo)
+            }
+            None => {
+                if nuevo.plazo_cuotas < 1 {
+                    return Err(AppError::OperacionNoPermitida(
+                        "El plazo debe ser de al menos 1 cuota".into(),
+                    ));
+                }
+                if nuevo.fiadores.is_empty() {
+                    return Err(AppError::OperacionNoPermitida(
+                        "Todo crédito debe tener al menos un fiador".into(),
+                    ));
+                }
+                if nuevo.fiadores.len() > MAX_FIADORES {
+                    return Err(AppError::OperacionNoPermitida(format!(
+                        "Se registran hasta {MAX_FIADORES} fiadores"
+                    )));
+                }
+                let mut fiadores = Vec::new();
+                for f in &nuevo.fiadores {
+                    let socio_id = self
+                        .socios
+                        .buscar_por_cedula(banco_id, &f.cedula)?
+                        .ok_or_else(|| {
+                            AppError::OperacionNoPermitida(format!(
+                                "El fiador con cédula «{}» no es socio del Bankomunal",
+                                f.cedula
+                            ))
+                        })?;
+                    if socio_id == nuevo.socio_id {
+                        return Err(AppError::OperacionNoPermitida(
+                            "El fiador no puede ser el mismo socio titular".into(),
+                        ));
+                    }
+                    fiadores.push(GarantiaSolicitud {
+                        id: Uuid::new_v4().to_string(),
+                        solicitud_id: String::new(),
+                        socio_id,
+                        rol: RolGarantia::Fiador,
+                        acciones_comprometidas: f.acciones_comprometidas,
+                    });
+                }
+                (None, fiadores, nuevo.monto, nuevo.plazo_cuotas)
+            }
+        };
 
         self.validar_desembolso(banco_id, &p, &nuevo, &solicitud, monto, plazo)?;
 
@@ -440,7 +581,10 @@ impl CreditoService {
         // RF-61: tabla de amortización desde el mes siguiente al desembolso.
         let primer_vencimiento = sumar_un_mes(&fecha);
         let cuotas = calcular_tabla(monto, tasa, plazo, &primer_vencimiento);
-        let fecha_vencimiento = cuotas.last().map(|c| c.fecha_vencimiento.clone()).unwrap_or(fecha.clone());
+        let fecha_vencimiento = cuotas
+            .last()
+            .map(|c| c.fecha_vencimiento.clone())
+            .unwrap_or(fecha.clone());
 
         let credito = Credito {
             id: Uuid::new_v4().to_string(),
@@ -475,17 +619,286 @@ impl CreditoService {
             })
             .collect::<Vec<_>>();
 
-        self.creditos.crear(banco_id, &credito, &cuotas, &garantias_credito)?;
+        self.creditos
+            .crear(banco_id, &credito, &cuotas, &garantias_credito)?;
 
-        // RF-62: el desembolso sale de caja como Desembolso de Crédito (CON).
-        self.libro.registrar_desembolso(
+        // RF-62: el desembolso sale de caja como Desembolso de Crédito (CON). Si el
+        // asiento falla, se deshace el crédito recién creado: nunca debe quedar un crédito
+        // en cartera sin su egreso en el Libro, porque eso descuadraría el Balance.
+        if let Err(e) = self.libro.registrar_desembolso(
             banco_id,
             &fecha,
             monto,
             &credito.socio_id,
             &credito.id,
-            &format!("Desembolso crédito Nº {} a {} cuotas", credito.numero, plazo),
-        )?;
+            &format!(
+                "Desembolso crédito Nº {} a {} cuotas",
+                credito.numero, plazo
+            ),
+        ) {
+            let _ = self.creditos.eliminar(banco_id, &credito.id);
+            return Err(e);
+        }
+
+        Ok(credito)
+    }
+
+    /// Próximo número de crédito que se asignaría al desembolsar (vista previa para la
+    /// pantalla de Desembolso). Es informativo: el número definitivo se fija al confirmar.
+    pub fn siguiente_numero(&self, banco_id: &str) -> Result<String, AppError> {
+        self.creditos.siguiente_numero(banco_id)
+    }
+
+    pub fn marcar_credito_pagado(&self, banco_id: &str, credito_id: &str) -> Result<(), AppError> {
+        self.creditos
+            .actualizar_estatus(banco_id, credito_id, EstadoCredito::Pagado.as_str())
+    }
+
+    /// RF-28 (venta parcial → abono a deuda): abona `monto` al capital de los créditos
+    /// VIGENTES del socio, del más antiguo al más nuevo, sin exceder cada saldo. Devuelve
+    /// `(abonado, saldo_restante_total)`. Lo que no alcanza a cubrir deuda queda en manos
+    /// del llamador (se le paga al socio en efectivo).
+    pub fn abonar_deuda_de_socio(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+        monto: f64,
+    ) -> Result<(f64, f64), AppError> {
+        let mut restante = monto.round().max(0.0);
+        let mut abonado = 0.0;
+
+        let mut creditos: Vec<Credito> = self
+            .creditos
+            .listar(banco_id)?
+            .into_iter()
+            .filter(|c| c.socio_id == socio_id && c.estatus == EstadoCredito::Vigente)
+            .collect();
+        creditos.sort_by(|a, b| a.fecha_desembolso.cmp(&b.fecha_desembolso));
+
+        for c in &creditos {
+            if restante <= 0.0 {
+                break;
+            }
+            let paso = restante.min(c.saldo_pendiente);
+            if paso <= 0.0 {
+                continue;
+            }
+            self.creditos.abonar_capital(banco_id, &c.id, paso)?;
+            abonado += paso;
+            restante -= paso;
+        }
+
+        let saldo_restante = self
+            .saldos_vigentes_por_socio(banco_id)?
+            .into_iter()
+            .find(|(id, _)| id == socio_id)
+            .map(|(_, s)| s)
+            .unwrap_or(0.0);
+        Ok((abonado, saldo_restante))
+    }
+
+    /// RF-77 a RF-82: Registra el refinanciamiento de un crédito vigente.
+    pub fn registrar_refinanciamiento(
+        &self,
+        banco_id: &str,
+        refinanciamiento: NuevoRefinanciamiento,
+    ) -> Result<Credito, AppError> {
+        let p = self.parametros.obtener(banco_id)?;
+        let fecha = fecha_o_hoy(refinanciamiento.fecha.as_deref())?;
+
+        // Buscar el crédito anterior
+        let credito_anterior = self
+            .creditos
+            .buscar_por_id(banco_id, &refinanciamiento.credito_id_anterior)?
+            .ok_or_else(|| {
+                AppError::OperacionNoPermitida("El crédito anterior no existe".into())
+            })?;
+
+        if credito_anterior.estatus != EstadoCredito::Vigente {
+            return Err(AppError::OperacionNoPermitida(format!(
+                "Sólo los créditos vigentes pueden refinanciarse; este está {}",
+                credito_anterior.estatus.as_str()
+            )));
+        }
+
+        // El capital pendiente del crédito anterior se rola al nuevo: el monto nuevo no
+        // puede ser menor (si el socio quiere abonar, es un pago de cuota, no un
+        // refinanciamiento). Sólo el excedente sobre este saldo es dinero nuevo.
+        let saldo_anterior = credito_anterior.saldo_pendiente;
+        if refinanciamiento.monto + 0.01 < saldo_anterior {
+            return Err(AppError::OperacionNoPermitida(format!(
+                "El monto del refinanciamiento (${}) no puede ser menor al saldo de capital \
+                 pendiente del crédito anterior (${})",
+                pesos(refinanciamiento.monto),
+                pesos(saldo_anterior)
+            )));
+        }
+
+        let mut fiadores = Vec::new();
+        if refinanciamiento.fiadores.is_empty() {
+            for f in credito_anterior
+                .garantias
+                .iter()
+                .filter(|g| g.rol == RolGarantia::Fiador)
+            {
+                fiadores.push(GarantiaSolicitud {
+                    id: Uuid::new_v4().to_string(),
+                    solicitud_id: String::new(),
+                    socio_id: f.socio_id.clone(),
+                    rol: RolGarantia::Fiador,
+                    acciones_comprometidas: f.acciones_comprometidas,
+                });
+            }
+        } else {
+            for f in &refinanciamiento.fiadores {
+                let socio_id = self
+                    .socios
+                    .buscar_por_cedula(banco_id, &f.cedula)?
+                    .ok_or_else(|| {
+                        AppError::OperacionNoPermitida(format!(
+                            "El fiador con cédula «{}» no es socio del Bankomunal",
+                            f.cedula
+                        ))
+                    })?;
+                if socio_id == credito_anterior.socio_id {
+                    return Err(AppError::OperacionNoPermitida(
+                        "El fiador no puede ser el mismo socio titular".into(),
+                    ));
+                }
+                fiadores.push(GarantiaSolicitud {
+                    id: Uuid::new_v4().to_string(),
+                    solicitud_id: String::new(),
+                    socio_id,
+                    rol: RolGarantia::Fiador,
+                    acciones_comprometidas: f.acciones_comprometidas,
+                });
+            }
+        }
+
+        // Validate basic rules similar to `validar_desembolso`
+        let monto = refinanciamiento.monto;
+        let plazo = refinanciamiento.plazo_cuotas;
+
+        let nuevo = NuevoDesembolso {
+            solicitud_id: None,
+            socio_id: credito_anterior.socio_id.clone(),
+            monto,
+            plazo_cuotas: plazo,
+            destino: credito_anterior.destino,
+            fiadores: refinanciamiento.fiadores.clone(),
+            fecha: Some(fecha.clone()),
+        };
+
+        self.validar_desembolso(banco_id, &p, &nuevo, &None, monto, plazo)?;
+
+        // RN-04 (RF-57): garantía en acciones, % titular + % fiadores.
+        let (_acciones_titular, garantias) =
+            self.garantia_suficiente(banco_id, &p, &nuevo, &fiadores, monto)?;
+
+        // Number assignment
+        let numero = self.creditos.siguiente_numero(banco_id)?;
+        let tasa = p.tasa_interes_ordinario;
+
+        let primer_vencimiento = sumar_un_mes(&fecha);
+        let cuotas = calcular_tabla(monto, tasa, plazo, &primer_vencimiento);
+        let fecha_vencimiento = cuotas
+            .last()
+            .map(|c| c.fecha_vencimiento.clone())
+            .unwrap_or(fecha.clone());
+
+        let credito = Credito {
+            id: Uuid::new_v4().to_string(),
+            socio_id: nuevo.socio_id.clone(),
+            numero,
+            monto_original: monto,
+            tasa,
+            plazo_cuotas: plazo,
+            cuota_actual: 1,
+            saldo_pendiente: monto,
+            destino: nuevo.destino,
+            estatus: EstadoCredito::Vigente,
+            fecha_solicitud: fecha.clone(), // RF-44 no req request
+            fecha_desembolso: fecha.clone(),
+            frecuencia_pago: super::domain::FRECUENCIA_PAGO_MENSUAL.to_string(),
+            fecha_vencimiento,
+            solicitud_id: None,
+            garantias: Vec::new(),
+        };
+
+        let garantias_credito = garantias
+            .iter()
+            .map(|g| GarantiaCredito {
+                id: Uuid::new_v4().to_string(),
+                credito_id: credito.id.clone(),
+                socio_id: g.socio_id.clone(),
+                rol: g.rol,
+                acciones_comprometidas: g.acciones_comprometidas,
+            })
+            .collect::<Vec<_>>();
+
+        self.creditos
+            .crear(banco_id, &credito, &cuotas, &garantias_credito)?;
+
+        // RF-62 vía Refinanciamiento (COR): sólo el dinero NUEVO sale de caja. El capital
+        // viejo ya fue saldado y se rola al nuevo crédito, de modo que el Balance sigue
+        // cuadrando: Δefectivo = −(monto − saldo_anterior) y Δcartera = +(monto −
+        // saldo_anterior) se cancelan (Activo = Pasivo). Si no hay dinero nuevo (puro
+        // re-plazo del mismo saldo) no hay asiento porque no se movió caja.
+        // Interés YA DEVENGADO del crédito anterior (ordinario + mora de cuotas vencidas):
+        // se reconoce como ingreso (OR + MO), sea que el socio lo pague en efectivo o lo
+        // capitalice en el monto nuevo. Reconocerlo deja el efectivo exacto y el Balance
+        // cuadrado (la única variación del Activo es ese ingreso, que el Cierre reparte).
+        let (interes_ord, mora) =
+            self.creditos
+                .interes_pendiente(banco_id, &credito_anterior.id, &fecha)?;
+        let neto = (monto - saldo_anterior).round();
+
+        // Todos los asientos del refinanciamiento. Si alguno falla se deshace el crédito
+        // nuevo (best-effort) y el anterior queda intacto: nada a medias.
+        let asentar = || -> Result<(), AppError> {
+            if neto > 0.0 {
+                self.libro.registrar_refinanciamiento(
+                    banco_id,
+                    &fecha,
+                    neto,
+                    &credito.socio_id,
+                    &credito.id,
+                    &format!(
+                        "Refinanciamiento crédito Nº {} (del anterior {}) — desembolso neto",
+                        credito.numero, credito_anterior.numero
+                    ),
+                )?;
+            }
+            if interes_ord > 0.0 {
+                self.libro.registrar_interes_ordinario(
+                    banco_id,
+                    &fecha,
+                    interes_ord,
+                    &credito.socio_id,
+                    &credito.id,
+                )?;
+            }
+            if mora > 0.0 {
+                self.libro.registrar_mora(
+                    banco_id,
+                    &fecha,
+                    mora,
+                    &credito.socio_id,
+                    &credito.id,
+                )?;
+            }
+            Ok(())
+        };
+        if let Err(e) = asentar() {
+            let _ = self.creditos.eliminar(banco_id, &credito.id);
+            return Err(e);
+        }
+
+        // El crédito nuevo y sus asientos ya están firmes: recién ahora se salda el
+        // anterior (REFINANCIADO, saldo 0), para no dejar el capital viejo fuera de la
+        // cartera si algo hubiera fallado antes.
+        self.creditos
+            .saldar_por_refinanciamiento(banco_id, &credito_anterior.id)?;
 
         Ok(credito)
     }
@@ -507,8 +920,9 @@ impl CreditoService {
         }
         if monto > p.monto_maximo_credito {
             return Err(AppError::OperacionNoPermitida(format!(
-                "El monto (${monto:.2}) supera el máximo del Bankomunal (${:.2})",
-                p.monto_maximo_credito
+                "El monto (${}) supera el máximo del Bankomunal (${})",
+                pesos(monto),
+                pesos(p.monto_maximo_credito)
             )));
         }
         if plazo < 1 {
@@ -529,24 +943,41 @@ impl CreditoService {
         let tope_rn03 = 5.0 * acciones_titular * p.valor_nominal;
         if monto > tope_rn03 {
             return Err(AppError::OperacionNoPermitida(format!(
-                "El monto (${monto:.2}) supera 5 veces las acciones propias del socio \
-                 (${tope_rn03:.2} = {acciones_titular:.0} acciones × ${:.2} × 5) (RN-03)",
-                p.valor_nominal
+                "El monto (${}) supera 5 veces las acciones propias del socio \
+                 (${} = {acciones_titular:.0} acciones × ${} × 5)",
+                pesos(monto),
+                pesos(tope_rn03),
+                pesos(p.valor_nominal)
             )));
         }
 
-        // RN-05 (RF-58): sin fiadores cruzados con créditos vigentes. Un socio no
-        // puede ser fiador de quien es su fiador (o titular) en otro crédito vigente.
-        if solicitud.is_none() {
-            let pares = self.creditos.pares_titular_fiador(banco_id)?;
-            for f in &nuevo.fiadores {
-                if pares.contains(&(f.cedula.clone(), nuevo.socio_id.clone()))
-                    || pares.contains(&(nuevo.socio_id.clone(), f.cedula.clone()))
-                {
-                    return Err(AppError::OperacionNoPermitida(
-                        "Fiadores cruzados con un crédito vigente (RN-05)".into(),
-                    ));
+        // RN-05 (RF-58): sin fiadores cruzados. Es cruzado si un fiador es, en otro crédito
+        // o solicitud activa, el TITULAR de un crédito afianzado por nuestro titular (se
+        // afianzan mutuamente). Aplica venga de una solicitud o de una carga directa.
+        let cruzados = self.pares_titular_fiador_activos(banco_id)?;
+        let fiador_ids: Vec<String> = match solicitud {
+            Some(sol) => sol
+                .garantias
+                .iter()
+                .filter(|g| g.rol == RolGarantia::Fiador)
+                .map(|g| g.socio_id.clone())
+                .collect(),
+            None => {
+                let mut ids = Vec::new();
+                for f in &nuevo.fiadores {
+                    if let Some(id) = self.socios.buscar_por_cedula(banco_id, &f.cedula)? {
+                        ids.push(id);
+                    }
                 }
+                ids
+            }
+        };
+        for fiador_id in &fiador_ids {
+            if cruzados.contains(&(fiador_id.clone(), nuevo.socio_id.clone())) {
+                return Err(AppError::OperacionNoPermitida(
+                    "No se permiten fiadores cruzados: el fiador y el solicitante ya se \
+                     respaldan mutuamente en otro crédito.".into(),
+                ));
             }
         }
 
@@ -569,8 +1000,8 @@ impl CreditoService {
         let acciones_requeridas_titular = monto * p.pct_garantia_socio / 100.0 / p.valor_nominal;
         if p.pct_garantia_socio > 0.0 && acciones_titular < acciones_requeridas_titular {
             return Err(AppError::OperacionNoPermitida(format!(
-                "El titular debe garantizar el {:.0}% del crédito con sus acciones \
-                 (RN-04): necesita {:.2} acciones y tiene {:.0}",
+                "El titular debe garantizar el {:.0}% del crédito con sus acciones: \
+                 necesita {:.2} acciones y tiene {:.0}",
                 p.pct_garantia_socio, acciones_requeridas_titular, acciones_titular
             )));
         }
@@ -581,23 +1012,53 @@ impl CreditoService {
         let acciones_requeridas_fiadores = monto * p.pct_garantia_fiador / 100.0 / p.valor_nominal;
         if p.pct_garantia_fiador > 0.0 && comprometidas < acciones_requeridas_fiadores {
             return Err(AppError::OperacionNoPermitida(format!(
-                "Los fiadores deben garantizar el {:.0}% del crédito con sus acciones \
-                 (RN-04): necesitan comprometer {:.2} acciones y comprometen {:.2}",
+                "Los fiadores deben garantizar el {:.0}% del crédito con sus acciones: \
+                 necesitan comprometer {:.2} acciones y comprometen {:.2}",
                 p.pct_garantia_fiador, acciones_requeridas_fiadores, comprometidas
             )));
         }
 
-        // Cada fiador debe poseer las acciones que compromete.
+        // Cada fiador debe tener LIBRES las acciones que compromete: las que ya respaldan
+        // otro crédito vigente no cuentan. Se muestra el nombre del socio, no su id interno.
         for (fid, acciones) in fiadores {
-            let disponibles = self.acciones.acciones_de_socio(banco_id, fid)? as f64;
-            if *acciones > disponibles {
+            let posee = self.acciones.acciones_de_socio(banco_id, fid)? as f64;
+            let comprometidas = self.acciones_comprometidas_de_socio(banco_id, fid)?;
+            let libres = (posee - comprometidas.ceil()).max(0.0);
+            if *acciones > libres {
+                let nombre = self
+                    .socios
+                    .nombre_de_socio(banco_id, fid)?
+                    .unwrap_or_else(|| fid.clone());
                 return Err(AppError::OperacionNoPermitida(format!(
-                    "El fiador con id «{fid}» compromete {acciones:.0} acciones pero sólo tiene {disponibles:.0}"
+                    "El fiador {nombre} compromete {acciones:.0} acciones pero sólo tiene \
+                     {libres:.0} libres (las demás ya respaldan otro crédito)."
                 )));
             }
         }
 
         Ok(())
+    }
+
+    /// RN-05 (RF-58): pares (titular, fiador) que ya existen —en créditos vigentes y en
+    /// solicitudes activas (no negadas ni ya desembolsadas)—, para detectar el afianzamiento
+    /// mutuo (fiadores cruzados) también antes del desembolso.
+    fn pares_titular_fiador_activos(
+        &self,
+        banco_id: &str,
+    ) -> Result<Vec<(String, String)>, AppError> {
+        let mut pares = self.creditos.pares_titular_fiador(banco_id)?;
+        for s in self.solicitudes.listar_por_estado(banco_id, None)? {
+            if s.estado == EstadoSolicitud::Negada {
+                continue;
+            }
+            if self.creditos.buscar_por_solicitud(banco_id, &s.id)?.is_some() {
+                continue; // ya desembolsada: cuenta como crédito vigente, no doble
+            }
+            for g in s.garantias.iter().filter(|g| g.rol == RolGarantia::Fiador) {
+                pares.push((s.socio_id.clone(), g.socio_id.clone()));
+            }
+        }
+        Ok(pares)
     }
 
     /// RN-04 (RF-57): el crédito debe quedar garantizado en acciones.
@@ -659,8 +1120,9 @@ impl CreditoService {
         }
         if monto > p.monto_maximo_credito {
             return Err(AppError::OperacionNoPermitida(format!(
-                "El monto (${monto:.2}) supera el máximo del Bankomunal (${:.2})",
-                p.monto_maximo_credito
+                "El monto (${}) supera el máximo del Bankomunal (${})",
+                pesos(monto),
+                pesos(p.monto_maximo_credito)
             )));
         }
         if plazo > p.plazo_maximo_cuotas {
@@ -700,7 +1162,11 @@ fn sumar_un_mes(fecha: &str) -> String {
     let mes: i64 = fecha.get(5..7).and_then(|s| s.parse().ok()).unwrap_or(1);
     let dia: i64 = fecha.get(8..10).and_then(|s| s.parse().ok()).unwrap_or(1);
     let max_dia = if mes == 12 { 31 } else { dia };
-    let (nuevo_anio, nuevo_mes) = if mes == 12 { (anio + 1, 1) } else { (anio, mes + 1) };
+    let (nuevo_anio, nuevo_mes) = if mes == 12 {
+        (anio + 1, 1)
+    } else {
+        (anio, mes + 1)
+    };
     format!("{nuevo_anio:04}-{nuevo_mes:02}-{max_dia:02}")
 }
 
@@ -714,12 +1180,10 @@ mod tests {
     use crate::modules::configuracion::application::ConfigService;
     use crate::modules::configuracion::data::SqliteConfiguracion;
     use crate::modules::creditos::data::{
-        AccionesParaCreditoAdapter, LibroViaCaja, ParametrosCreditoAdapter, SociosParaCreditoAdapter,
-        SqliteCreditos, SqliteSolicitudes,
+        AccionesParaCreditoAdapter, LibroViaCaja, ParametrosCreditoAdapter,
+        SociosParaCreditoAdapter, SqliteCreditos, SqliteSolicitudes,
     };
-    use crate::modules::creditos::domain::{
-        DestinoCredito, FiadorSolicitud, NuevaSolicitud,
-    };
+    use crate::modules::creditos::domain::{DestinoCredito, FiadorSolicitud, NuevaSolicitud};
     use crate::modules::socios::application::SocioService;
     use crate::modules::socios::data::SqliteSocios;
     use crate::modules::socios::domain::DatosSocio;
@@ -762,7 +1226,14 @@ mod tests {
 
         // La config se crea con valores por defecto al primer acceso.
         config.obtener_configuracion(&banco).unwrap();
-        Contexto { servicio, caja, config, socios, banco, db }
+        Contexto {
+            servicio,
+            caja,
+            config,
+            socios,
+            banco,
+            db,
+        }
     }
 
     /// Registra el socio n (o devuelve el ya creado) y da su id.
@@ -828,7 +1299,10 @@ mod tests {
         let cedula_fiador = "1002".to_string();
         let s = ctx
             .servicio
-            .registrar_solicitud(&ctx.banco, solicitud(&ctx, &titular, &cedula_fiador, 2_000_000.0))
+            .registrar_solicitud(
+                &ctx.banco,
+                solicitud(&ctx, &titular, &cedula_fiador, 2_000_000.0),
+            )
             .unwrap();
         assert_eq!(s.estado, EstadoSolicitud::Pendiente);
         assert_eq!(s.capacidad_pago, 600_000.0);
@@ -1046,7 +1520,7 @@ mod tests {
             .servicio
             .buscar_credito_por_solicitud(&ctx.banco, &s.id)
             .unwrap()
-.is_none());
+            .is_none());
     }
 
     /// RF-52/RF-54: una solicitud aprobada ya desembolsada no aparece en el listado
@@ -1083,7 +1557,10 @@ mod tests {
         }
 
         // Ambas aprobadas y sin desembolso → ambas aparecen.
-        let inicial = ctx.servicio.listar_solicitudes_desembolsables(&ctx.banco).unwrap();
+        let inicial = ctx
+            .servicio
+            .listar_solicitudes_desembolsables(&ctx.banco)
+            .unwrap();
         assert_eq!(inicial.len(), 2);
 
         // Se desembolsa la primera → ya no debe estar en el listado.
@@ -1102,7 +1579,10 @@ mod tests {
             )
             .unwrap();
 
-        let restantes = ctx.servicio.listar_solicitudes_desembolsables(&ctx.banco).unwrap();
+        let restantes = ctx
+            .servicio
+            .listar_solicitudes_desembolsables(&ctx.banco)
+            .unwrap();
         assert_eq!(restantes.len(), 1);
         assert_eq!(restantes[0].id, s2.id);
     }
@@ -1122,7 +1602,10 @@ mod tests {
             .servicio
             .registrar_solicitud(&ctx.banco, solicitud(&ctx, &titular, "1002", 2_000_000.0))
             .unwrap_err();
-        assert!(err.to_string().contains("RN-03"), "esperaba error RN-03, fue: {err}");
+        assert!(
+            err.to_string().contains("supera 5 veces las acciones propias"),
+            "esperaba error por relación 1 a 5, fue: {err}"
+        );
     }
 
     /// RN-04: los fiadores deben comprometer acciones suficientes. Se valida al
@@ -1139,7 +1622,10 @@ mod tests {
         let mut s = solicitud(&ctx, &titular, "1002", 2_000_000.0);
         s.fiadores[0].acciones_comprometidas = 1.0;
         let err = ctx.servicio.registrar_solicitud(&ctx.banco, s).unwrap_err();
-        assert!(err.to_string().contains("RN-04"), "esperaba error RN-04, fue: {err}");
+        assert!(
+            err.to_string().contains("fiadores deben garantizar"),
+            "esperaba error por garantía de fiadores, fue: {err}"
+        );
     }
 
     /// RF-55: el monto no puede superar el máximo configurado.
@@ -1182,7 +1668,10 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert!(err.to_string().contains("RN-03"), "esperaba error RN-03, fue: {err}");
+        assert!(
+            err.to_string().contains("supera 5 veces las acciones propias"),
+            "esperaba error por relación 1 a 5, fue: {err}"
+        );
     }
 
     /// RF-44: desembolso directo sin solicitud, identificando fiadores por cédula.
@@ -1214,5 +1703,459 @@ mod tests {
             .unwrap();
         assert_eq!(credito.numero, "001");
         assert!(credito.solicitud_id.is_none());
+    }
+
+    /// Suma del saldo pendiente de los créditos VIGENTES: la cartera del Balance del Mes.
+    fn cartera_vigente(ctx: &Contexto) -> f64 {
+        ctx.servicio
+            .listar_creditos(&ctx.banco)
+            .unwrap()
+            .iter()
+            .filter(|c| c.estatus == EstadoCredito::Vigente)
+            .map(|c| c.saldo_pendiente)
+            .sum()
+    }
+
+    /// Desembolsa un crédito directo de $1.000.000 a 6 cuotas (titular socio 1, fiador
+    /// socio 2), el insumo común de las pruebas de refinanciamiento.
+    fn desembolsar_millon(ctx: &Contexto) -> Credito {
+        let titular = socio(ctx, 1);
+        let fiador = socio(ctx, 2);
+        dar_acciones(ctx, &titular, 100);
+        dar_acciones(ctx, &fiador, 100);
+        ctx.servicio
+            .registrar_desembolso(
+                &ctx.banco,
+                NuevoDesembolso {
+                    solicitud_id: None,
+                    socio_id: titular,
+                    monto: 1_000_000.0,
+                    plazo_cuotas: 6,
+                    destino: DestinoCredito::Productivo,
+                    fiadores: vec![FiadorSolicitud {
+                        cedula: "1002".into(),
+                        acciones_comprometidas: 50.0,
+                    }],
+                    fecha: Some("2026-02-01".into()),
+                },
+            )
+            .unwrap()
+    }
+
+    fn refinanciar(ctx: &Contexto, credito_id: &str, monto: f64) -> Result<Credito, AppError> {
+        ctx.servicio.registrar_refinanciamiento(
+            &ctx.banco,
+            NuevoRefinanciamiento {
+                credito_id_anterior: credito_id.to_string(),
+                monto,
+                plazo_cuotas: 6,
+                intereses_en_efectivo: true,
+                fiadores: vec![FiadorSolicitud {
+                    cedula: "1002".into(),
+                    acciones_comprometidas: 50.0,
+                }],
+                fecha: Some("2026-03-01".into()),
+            },
+        )
+    }
+
+    /// RF-77..RF-82: un refinanciamiento con dinero nuevo salda el crédito anterior, sólo
+    /// desembolsa el excedente en caja y reconoce el interés devengado como ingreso. La
+    /// única variación del Activo es ese ingreso, que el Cierre reparte contra el Pasivo.
+    #[test]
+    fn el_refinanciamiento_con_dinero_nuevo_cuadra() {
+        let ctx = contexto();
+        let viejo = desembolsar_millon(&ctx); // desembolsado 2026-02-01, 6 cuotas al 3%
+        let antes = ctx.caja.saldo_caja(&ctx.banco).unwrap() + cartera_vigente(&ctx);
+
+        // Refinancia a $1.500.000 el 2026-03-01 (vence la cuota 1): rola el $1.000.000 y
+        // agrega $500.000 nuevos. `refinanciar` usa fecha 2026-03-01.
+        let nuevo = refinanciar(&ctx, &viejo.id, 1_500_000.0).unwrap();
+
+        // El crédito anterior queda saldado y fuera de la cartera.
+        let viejo = ctx
+            .servicio
+            .listar_creditos(&ctx.banco)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.id == viejo.id)
+            .unwrap();
+        assert_eq!(viejo.estatus, EstadoCredito::Refinanciado);
+        assert_eq!(viejo.saldo_pendiente, 0.0);
+
+        // El nuevo nace vigente por el monto refinanciado.
+        assert_eq!(nuevo.estatus, EstadoCredito::Vigente);
+        assert_eq!(nuevo.saldo_pendiente, 1_500_000.0);
+
+        let conn = ctx.db.open_banco_db(&ctx.banco).unwrap();
+        let suma = |codigo: &str, col: &str| -> f64 {
+            conn.query_row(
+                &format!("SELECT COALESCE(SUM({col}), 0) FROM movimiento_libro WHERE codigo = ?1"),
+                [codigo],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        // Sólo el dinero NUEVO salió de caja: COR = 1.500.000 − 1.000.000 = 500.000.
+        assert_eq!(suma("COR", "egreso"), 500_000.0);
+        // La cuota 1 (vencida al refinanciar) devengó su interés ordinario (3% de 1.000.000
+        // = 30.000); aún sin mora (se paga el día del vencimiento).
+        let or = suma("OR", "ingreso");
+        let mo = suma("MO", "ingreso");
+        assert_eq!(or, 30_000.0);
+        assert_eq!(mo, 0.0);
+
+        // La única variación del Activo es el ingreso reconocido (OR + MO).
+        let despues = ctx.caja.saldo_caja(&ctx.banco).unwrap() + cartera_vigente(&ctx);
+        assert!(
+            ((despues - antes) - (or + mo)).abs() < 0.01,
+            "Δactivo ({}) debe igualar el ingreso reconocido OR+MO ({})",
+            despues - antes,
+            or + mo
+        );
+    }
+
+    /// Un refinanciamiento sin dinero nuevo y sin interés devengado (mismo saldo, antes de
+    /// que venza ninguna cuota) no mueve la caja y aun así cuadra: la cartera pasa intacta
+    /// del crédito viejo al nuevo.
+    #[test]
+    fn el_refinanciamiento_sin_dinero_nuevo_ni_interes_no_mueve_caja() {
+        let ctx = contexto();
+        let viejo = desembolsar_millon(&ctx); // desembolsado 2026-02-01
+        let caja_antes = ctx.caja.saldo_caja(&ctx.banco).unwrap();
+        let cuadre_antes = caja_antes + cartera_vigente(&ctx);
+
+        // Refinancia por el mismo saldo el 2026-02-15: aún no vence la cuota 1, no hay
+        // interés devengado ni dinero nuevo.
+        ctx.servicio
+            .registrar_refinanciamiento(
+                &ctx.banco,
+                NuevoRefinanciamiento {
+                    credito_id_anterior: viejo.id.clone(),
+                    monto: 1_000_000.0,
+                    plazo_cuotas: 6,
+                    intereses_en_efectivo: true,
+                    fiadores: vec![FiadorSolicitud {
+                        cedula: "1002".into(),
+                        acciones_comprometidas: 50.0,
+                    }],
+                    fecha: Some("2026-02-15".into()),
+                },
+            )
+            .unwrap();
+
+        // La caja no se movió y no se asentó ningún COR/OR/MO por el refinanciamiento.
+        assert_eq!(ctx.caja.saldo_caja(&ctx.banco).unwrap(), caja_antes);
+        let conn = ctx.db.open_banco_db(&ctx.banco).unwrap();
+        let movs: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM movimiento_libro WHERE codigo IN ('COR', 'OR', 'MO')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(movs, 0, "sin dinero nuevo ni interés no hay asientos");
+
+        // Y el Cuadre se mantiene.
+        let cuadre_despues = ctx.caja.saldo_caja(&ctx.banco).unwrap() + cartera_vigente(&ctx);
+        assert!((cuadre_despues - cuadre_antes).abs() < 0.01);
+    }
+
+    /// RF-77..82: al refinanciar un crédito con cuotas vencidas, su interés ordinario y su
+    /// mora devengados se reconocen como ingreso (OR + MO); la única variación del Activo
+    /// es ese ingreso, así el sistema sigue cuadrando.
+    #[test]
+    fn el_refinanciamiento_reconoce_el_interes_devengado() {
+        let ctx = contexto();
+        let viejo = desembolsar_millon(&ctx); // 2026-02-01, cuotas vencen 03-01, 04-01, …
+        let antes = ctx.caja.saldo_caja(&ctx.banco).unwrap() + cartera_vigente(&ctx);
+
+        // Refinancia el 2026-06-01: las cuotas 1..4 (03-01..06-01) están vencidas → hay
+        // interés ordinario devengado y mora. Mismo saldo (los intereses van aparte).
+        ctx.servicio
+            .registrar_refinanciamiento(
+                &ctx.banco,
+                NuevoRefinanciamiento {
+                    credito_id_anterior: viejo.id.clone(),
+                    monto: 1_000_000.0,
+                    plazo_cuotas: 6,
+                    intereses_en_efectivo: true,
+                    fiadores: vec![FiadorSolicitud {
+                        cedula: "1002".into(),
+                        acciones_comprometidas: 50.0,
+                    }],
+                    fecha: Some("2026-06-01".into()),
+                },
+            )
+            .unwrap();
+
+        let conn = ctx.db.open_banco_db(&ctx.banco).unwrap();
+        let or: f64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(ingreso), 0) FROM movimiento_libro WHERE codigo = 'OR'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mo: f64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(ingreso), 0) FROM movimiento_libro WHERE codigo = 'MO'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(or > 0.0, "debe reconocerse el interés ordinario devengado");
+        assert!(mo > 0.0, "debe reconocerse la mora de las cuotas vencidas");
+
+        // El Cuadre: la única variación del Activo es el ingreso reconocido (OR + MO).
+        let despues = ctx.caja.saldo_caja(&ctx.banco).unwrap() + cartera_vigente(&ctx);
+        assert!(
+            ((despues - antes) - (or + mo)).abs() < 0.01,
+            "Δactivo ({}) debe igualar OR+MO ({})",
+            despues - antes,
+            or + mo
+        );
+    }
+
+    /// El monto del refinanciamiento no puede ser menor al saldo pendiente del crédito
+    /// anterior: abonar es un pago de cuota, no un refinanciamiento.
+    #[test]
+    fn el_refinanciamiento_no_admite_monto_menor_al_saldo() {
+        let ctx = contexto();
+        let viejo = desembolsar_millon(&ctx);
+        let err = refinanciar(&ctx, &viejo.id, 600_000.0).unwrap_err();
+        assert!(err.to_string().contains("no puede ser menor"));
+        // El crédito anterior sigue vigente: la operación no dejó nada a medias.
+        let viejo = ctx
+            .servicio
+            .listar_creditos(&ctx.banco)
+            .unwrap()
+            .into_iter()
+            .find(|c| c.id == viejo.id)
+            .unwrap();
+        assert_eq!(viejo.estatus, EstadoCredito::Vigente);
+        assert_eq!(viejo.saldo_pendiente, 1_000_000.0);
+    }
+
+    /// Un Libro que siempre falla, para probar la compensación: si el asiento no se puede
+    /// registrar, la operación no debe dejar el crédito sin su movimiento en caja.
+    struct LibroFalla;
+    impl super::super::domain::LibroContablePort for LibroFalla {
+        fn registrar_desembolso(
+            &self,
+            _: &str,
+            _: &str,
+            _: f64,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<(), AppError> {
+            Err(AppError::OperacionNoPermitida(
+                "falla simulada del Libro".into(),
+            ))
+        }
+        fn registrar_refinanciamiento(
+            &self,
+            _: &str,
+            _: &str,
+            _: f64,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<(), AppError> {
+            Err(AppError::OperacionNoPermitida(
+                "falla simulada del Libro".into(),
+            ))
+        }
+        fn registrar_interes_ordinario(
+            &self,
+            _: &str,
+            _: &str,
+            _: f64,
+            _: &str,
+            _: &str,
+        ) -> Result<(), AppError> {
+            Err(AppError::OperacionNoPermitida(
+                "falla simulada del Libro".into(),
+            ))
+        }
+        fn registrar_mora(
+            &self,
+            _: &str,
+            _: &str,
+            _: f64,
+            _: &str,
+            _: &str,
+        ) -> Result<(), AppError> {
+            Err(AppError::OperacionNoPermitida(
+                "falla simulada del Libro".into(),
+            ))
+        }
+    }
+
+    /// Un CreditoService idéntico al de `ctx` pero con un Libro que siempre falla.
+    fn servicio_con_libro_falla(ctx: &Contexto) -> CreditoService {
+        CreditoService::new(
+            Arc::new(SqliteSolicitudes::new(ctx.db.clone())),
+            Arc::new(SqliteCreditos::new(ctx.db.clone())),
+            Arc::new(ParametrosCreditoAdapter::new(ctx.db.clone())),
+            Arc::new(AccionesParaCreditoAdapter::new(ctx.db.clone())),
+            Arc::new(SociosParaCreditoAdapter::new(ctx.db.clone())),
+            Arc::new(LibroFalla),
+        )
+    }
+
+    /// Atomicidad: si el asiento CON falla, el desembolso se deshace por completo — ni
+    /// crédito ni cuotas quedan a medias (nunca un crédito en cartera sin egreso en caja).
+    #[test]
+    fn si_el_asiento_falla_el_desembolso_no_deja_credito_a_medias() {
+        let ctx = contexto();
+        let titular = socio(&ctx, 1);
+        let fiador = socio(&ctx, 2);
+        dar_acciones(&ctx, &titular, 100);
+        dar_acciones(&ctx, &fiador, 100);
+
+        let err = servicio_con_libro_falla(&ctx)
+            .registrar_desembolso(
+                &ctx.banco,
+                NuevoDesembolso {
+                    solicitud_id: None,
+                    socio_id: titular,
+                    monto: 1_000_000.0,
+                    plazo_cuotas: 6,
+                    destino: DestinoCredito::Productivo,
+                    fiadores: vec![FiadorSolicitud {
+                        cedula: "1002".into(),
+                        acciones_comprometidas: 50.0,
+                    }],
+                    fecha: Some("2026-02-01".into()),
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, AppError::OperacionNoPermitida(_)));
+
+        // Compensación: no quedó ni el crédito ni sus cuotas.
+        assert!(ctx.servicio.listar_creditos(&ctx.banco).unwrap().is_empty());
+        let conn = ctx.db.open_banco_db(&ctx.banco).unwrap();
+        let cuotas: i64 = conn
+            .query_row("SELECT COUNT(*) FROM cuota", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cuotas, 0, "las cuotas del crédito deshecho no deben quedar");
+    }
+
+    /// Atomicidad: si el asiento del refinanciamiento falla, el crédito nuevo se deshace y
+    /// el anterior queda intacto (VIGENTE con su saldo), sin quedar nada a medias.
+    #[test]
+    fn si_el_asiento_falla_el_refinanciamiento_no_toca_el_credito_anterior() {
+        let ctx = contexto();
+        let viejo = desembolsar_millon(&ctx);
+
+        let err = servicio_con_libro_falla(&ctx)
+            .registrar_refinanciamiento(
+                &ctx.banco,
+                NuevoRefinanciamiento {
+                    credito_id_anterior: viejo.id.clone(),
+                    monto: 1_500_000.0,
+                    plazo_cuotas: 6,
+                    intereses_en_efectivo: true,
+                    fiadores: vec![FiadorSolicitud {
+                        cedula: "1002".into(),
+                        acciones_comprometidas: 50.0,
+                    }],
+                    fecha: Some("2026-03-01".into()),
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, AppError::OperacionNoPermitida(_)));
+
+        // Sólo queda el crédito anterior, intacto: ni saldado ni refinanciado.
+        let creditos = ctx.servicio.listar_creditos(&ctx.banco).unwrap();
+        assert_eq!(
+            creditos.len(),
+            1,
+            "no debe quedar el crédito nuevo a medias"
+        );
+        assert_eq!(creditos[0].id, viejo.id);
+        assert_eq!(creditos[0].estatus, EstadoCredito::Vigente);
+        assert_eq!(creditos[0].saldo_pendiente, 1_000_000.0);
+    }
+
+    /// Desembolsa un crédito directo de $1.000.000 para `titular` afianzado por `cedula`.
+    fn desembolsar_para(ctx: &Contexto, titular: &str, cedula_fiador: &str) {
+        ctx.servicio
+            .registrar_desembolso(
+                &ctx.banco,
+                NuevoDesembolso {
+                    solicitud_id: None,
+                    socio_id: titular.to_string(),
+                    monto: 1_000_000.0,
+                    plazo_cuotas: 6,
+                    destino: DestinoCredito::Productivo,
+                    fiadores: vec![FiadorSolicitud {
+                        cedula: cedula_fiador.into(),
+                        acciones_comprometidas: 50.0,
+                    }],
+                    fecha: Some("2026-02-01".into()),
+                },
+            )
+            .unwrap();
+    }
+
+    /// RN-05 (RF-58): si B afianza a A en un crédito vigente, A no puede afianzar a B en
+    /// otro (fiadores cruzados). Antes esta regla no se aplicaba (comparaba cédula vs id).
+    #[test]
+    fn rechaza_fiadores_cruzados() {
+        let ctx = contexto();
+        let a = socio(&ctx, 1); // cédula 1001
+        let b = socio(&ctx, 2); // cédula 1002
+        dar_acciones(&ctx, &a, 100);
+        dar_acciones(&ctx, &b, 100);
+
+        // Crédito vigente: titular A, fiador B.
+        desembolsar_para(&ctx, &a, "1002");
+
+        // Cruzado: titular B, fiador A → se rechaza.
+        let err = ctx
+            .servicio
+            .registrar_desembolso(
+                &ctx.banco,
+                NuevoDesembolso {
+                    solicitud_id: None,
+                    socio_id: b,
+                    monto: 1_000_000.0,
+                    plazo_cuotas: 6,
+                    destino: DestinoCredito::Productivo,
+                    fiadores: vec![FiadorSolicitud {
+                        cedula: "1001".into(),
+                        acciones_comprometidas: 50.0,
+                    }],
+                    fecha: Some("2026-02-01".into()),
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("cruzados"));
+    }
+
+    /// RN-05 no debe bloquear de más: que B afiance dos créditos distintos de A no es
+    /// cruzado (A nunca afianza a B), así que el segundo desembolso pasa.
+    #[test]
+    fn el_mismo_fiador_en_dos_creditos_no_es_cruzado() {
+        let ctx = contexto();
+        let a = socio(&ctx, 1);
+        let b = socio(&ctx, 2);
+        dar_acciones(&ctx, &a, 100);
+        dar_acciones(&ctx, &b, 100);
+
+        desembolsar_para(&ctx, &a, "1002");
+        // A pide otro crédito, otra vez con B de fiador: no es cruzado.
+        desembolsar_para(&ctx, &a, "1002");
+        let vigentes = ctx
+            .servicio
+            .listar_creditos(&ctx.banco)
+            .unwrap()
+            .iter()
+            .filter(|c| c.estatus == EstadoCredito::Vigente)
+            .count();
+        assert_eq!(vigentes, 2);
     }
 }

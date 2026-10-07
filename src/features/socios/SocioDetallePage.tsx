@@ -4,6 +4,7 @@ import { sociosService } from './sociosService';
 import { validarFormularioSocio } from './validaciones';
 import { DatosSocio, Protegido, Socio } from './types';
 import { ResumenMesAcciones } from '../acciones/types';
+import { Credito } from '../creditos/types';
 import { BadgeEstatus } from '../../core/components/BadgeEstatus';
 import { Campo } from '../../core/components/Campo';
 import { nombreMes } from '../../core/lib/dates';
@@ -46,6 +47,9 @@ export function SocioDetallePage() {
     const [errores, setErrores] = useState<Record<string, string>>({});
     const [acciones, setAcciones] = useState(0);
     const [historial, setHistorial] = useState<ResumenMesAcciones[]>([]);
+    const [creditos, setCreditos] = useState<Credito[]>([]);
+    const [creditosAvalados, setCreditosAvalados] = useState<Credito[]>([]);
+    const [nombresSocios, setNombresSocios] = useState<Record<string, string>>({});
 
     useEffect(() => {
         if (esNuevo) return;
@@ -64,6 +68,15 @@ export function SocioDetallePage() {
 
         sociosService.accionesDeSocio(id!).then(setAcciones).catch(() => { });
         sociosService.historialAcciones(id!).then(setHistorial).catch(() => { });
+        sociosService.creditosDeSocio(id!).then(setCreditos).catch(() => { });
+        sociosService.creditosQueAvala(id!).then(setCreditosAvalados).catch(() => { });
+        sociosService.listar().then(socios => {
+            const map: Record<string, string> = {};
+            for (const s of socios) {
+                map[s.id] = s.nombre_completo.trim();
+            }
+            setNombresSocios(map);
+        }).catch(() => { });
     }, [id, esNuevo]);
 
     async function guardar(ev: React.FormEvent) {
@@ -81,8 +94,11 @@ export function SocioDetallePage() {
         setGuardando(true);
         try {
             if (esNuevo) {
-                const creado = await sociosService.crear(form);
-                navigate(`/app/socios/${creado.id}`, { replace: true });
+                await sociosService.crear(form);
+                // Tras crear, se vuelve a la LISTA de socios (no al detalle) con un aviso de éxito.
+                navigate('/app/socios', {
+                    state: { creadoNombre: `${form.nombres} ${form.apellidos}`.trim() },
+                });
             } else {
                 setSocio(await sociosService.actualizar(id!, form));
                 setSuccess('Datos del socio actualizados.');
@@ -143,22 +159,17 @@ export function SocioDetallePage() {
                             {/* Estatus y acciones activas no se editan aquí: los gobiernan
                                 Liquidación y Acciones, no el formulario del socio. */}
                             <div className="campo-lectura">
-                                <label className="form-label">Estatus</label>
+                                <label className="form-label">Estado</label>
                                 <div>
                                     {socio
                                         ? <BadgeEstatus estatus={socio.estatus} />
-                                        : <span className="badge-estatus badge-activo">Activo</span>}
-                                </div>
+                                        : <BadgeEstatus estatus="ACTIVO" />}</div>
                             </div>
                         </div>
 
                         <div className="config-grid mt-4" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
                             <Campo label="Profesión u oficio" value={form.profesion} onChange={set('profesion')} />
                             <Campo label="Dirección" value={form.direccion} onChange={set('direccion')} />
-                            <Campo
-                                label="Teléfono" value={form.telefono} onChange={set('telefono')}
-                                tipo="numero" error={errores.telefono}
-                            />
                             <Campo
                                 label="Celular" value={form.celular} onChange={set('celular')}
                                 tipo="numero" error={errores.celular}
@@ -281,57 +292,75 @@ export function SocioDetallePage() {
             )}
 
             {pestana === 'creditos' && (
-                <TablaPendiente
-                    columnas={['N° Crédito', 'Monto', 'Saldo pendiente', 'Estatus']}
-                    alineadas={[false, true, true, false]}
-                    modulo="Créditos"
-                    requisitos="RF-43 a RF-62"
-                />
+                <>
+                    <table className="activity-table">
+                        <thead>
+                            <tr>
+                                <th>N° Crédito</th>
+                                <th style={{ textAlign: 'right' }}>Monto</th>
+                                <th style={{ textAlign: 'right', paddingRight: '2.5rem' }}>Saldo pendiente</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {creditos.map(c => (
+                                <tr key={c.id}>
+                                    <td>{c.numero}</td>
+                                    <td style={{ textAlign: 'right' }}>{fmt(c.monto_original, moneda)}</td>
+                                    <td style={{ textAlign: 'right', paddingRight: '2.5rem' }}>{fmt(c.saldo_pendiente, moneda)}</td>
+                                    <td><BadgeCredito estatus={c.estatus} /></td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {creditos.length === 0 && (
+                        <div className="empty-state">
+                            Este socio no tiene historial de créditos.
+                        </div>
+                    )}
+                </>
             )}
 
             {pestana === 'avala' && (
-                <TablaPendiente
-                    columnas={['N° Crédito', 'A nombre de', 'Monto', 'Estatus']}
-                    alineadas={[false, false, true, false]}
-                    modulo="Créditos"
-                    requisitos="RF-48, RF-101"
-                />
+                <>
+                    <table className="activity-table">
+                        <thead>
+                            <tr>
+                                <th>N° Crédito</th>
+                                <th>A nombre de</th>
+                                <th style={{ textAlign: 'right', paddingRight: '2.5rem' }}>Monto</th>
+                                <th>Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {creditosAvalados.map(c => (
+                                <tr key={c.id}>
+                                    <td>{c.numero}</td>
+                                    <td>{nombresSocios[c.socio_id] || c.socio_id}</td>
+                                    <td style={{ textAlign: 'right', paddingRight: '2.5rem' }}>{fmt(c.monto_original, moneda)}</td>
+                                    <td><BadgeCredito estatus={c.estatus} /></td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                    {creditosAvalados.length === 0 && (
+                        <div className="empty-state">
+                            Este socio no avala ningún crédito como fiador.
+                        </div>
+                    )}
+                </>
             )}
         </div>
     );
 }
 
-/**
- * Cabecera de tabla del mockup con un aviso explícito de que el módulo que la alimenta
- * todavía no existe.
- *
- * A propósito NO se inventan filas de ejemplo: un historial de acciones o de créditos
- * con datos falsos se ve idéntico a uno real, y sobre esos números se toman decisiones
- * de plata en la reunión de socios.
- */
-function TablaPendiente({ columnas, alineadas, modulo, requisitos }: {
-    columnas: string[];
-    alineadas: boolean[];
-    modulo: string;
-    requisitos: string;
-}) {
-    return (
-        <>
-            <table className="activity-table">
-                <thead>
-                    <tr>
-                        {columnas.map((c, i) => (
-                            <th key={c} style={{ textAlign: alineadas[i] ? 'right' : 'left' }}>{c}</th>
-                        ))}
-                    </tr>
-                </thead>
-            </table>
-            <div className="pendiente-nota mt-4">
-                Esta información la produce el módulo de <strong>{modulo}</strong> ({requisitos}),
-                que todavía no está construido.
-            </div>
-        </>
-    );
+function BadgeCredito({ estatus }: { estatus: string }) {
+    const s = estatus.toUpperCase();
+    let cls = 'badge-estatus';
+    if (s === 'VIGENTE' || s === 'APROBADA') cls += ' badge-activo';
+    else if (s === 'PAGADO') cls += ' badge-retirado';
+    else if (s === 'PENDIENTE') cls += ' badge-deuda';
+    return <span className={cls}>{estatus}</span>;
 }
 
 function Tab({ actual, valor, onClick, children }: {

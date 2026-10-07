@@ -50,9 +50,6 @@ impl EstatusSocio {
         }
     }
 
-    pub fn esta_retirado(&self) -> bool {
-        !matches!(self, Self::Activo)
-    }
 }
 
 /// Beneficiario en caso de muerte del socio (RF-20), a quien se le ceden las acciones.
@@ -80,6 +77,9 @@ pub struct Protegido {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Socio {
     pub id: String,
+    /// Nº correlativo del socio (como en el Libro). Lo asigna el sistema al crear y no se
+    /// reutiliza: un socio retirado conserva el suyo. 0 mientras aún no se ha persistido.
+    pub numero: i64,
     pub cedula: String,
     pub nombres: String,
     pub apellidos: String,
@@ -103,31 +103,9 @@ impl Socio {
             .trim()
             .to_string()
     }
-
-    /// Acciones que el socio tiene libres, descontando las comprometidas como garantía
-    /// de un crédito vigente (RF-29, RN-06).
-    ///
-    /// PENDIENTE: depende del módulo de Acciones y del de Créditos, que aún no existen.
-    /// No se implementa con lógica provisional a propósito: devolver 0 o el total sería
-    /// una respuesta plausible pero falsa, y las Liquidaciones se calcularían mal sin
-    /// que nadie lo note.
-    pub fn acciones_libres(&self) -> i64 {
-        todo!("Requiere el módulo de Acciones (lote_acciones) y de Créditos (garantia_credito)")
-    }
-
-    /// Total de acciones activas del socio, sumando sus lotes no liquidados (RF-24).
-    ///
-    /// PENDIENTE: depende del módulo de Acciones.
-    pub fn acciones_activas(&self) -> i64 {
-        todo!("Requiere el módulo de Acciones (lote_acciones)")
-    }
-
-    /// Si el socio tiene algún crédito sin cancelar (RF-32).
-    ///
-    /// PENDIENTE: depende del módulo de Créditos.
-    pub fn tiene_credito_vigente(&self) -> bool {
-        todo!("Requiere el módulo de Créditos (credito.estatus)")
-    }
+    // Nota: las acciones libres/activas del socio y si tiene crédito vigente se responden
+    // desde los módulos de Acciones (`AccionesService`) y Créditos (`CreditoService`),
+    // que ya existen; no viven como métodos de esta entidad.
 }
 
 /// Datos que captura el formulario de socio, tanto al crear (RF-15) como al
@@ -161,14 +139,39 @@ pub struct DatosSocio {
 pub trait SocioPort: Send + Sync {
     /// Inserta el socio con su beneficiario y protegidos de forma atómica.
     fn crear(&self, banco_id: &str, socio: &Socio) -> Result<(), AppError>;
+    /// Próximo Nº de socio correlativo (MAX+1, contando también a los retirados para no
+    /// reutilizar números).
+    fn siguiente_numero(&self, banco_id: &str) -> Result<i64, AppError>;
     /// Reemplaza los datos del socio y sus allegados de forma atómica.
     fn actualizar(&self, banco_id: &str, socio: &Socio) -> Result<(), AppError>;
     fn buscar_por_id(&self, banco_id: &str, id: &str) -> Result<Option<Socio>, AppError>;
     fn buscar_por_cedula(&self, banco_id: &str, cedula: &str) -> Result<Option<Socio>, AppError>;
-    /// Todos los socios, ordenados por apellidos y nombres.
+    /// Roster de socios ordenado por apellidos y nombres. Es una proyección de listado:
+    /// devuelve los socios SIN beneficiario ni protegidos (`beneficiario: None`,
+    /// `protegidos: []`). Para el registro completo úsese `buscar_por_id`.
     fn listar(&self, banco_id: &str) -> Result<Vec<Socio>, AppError>;
     /// Cuántos socios cuentan para el cupo de RN-01 (los que no están retirados).
     fn contar_activos(&self, banco_id: &str) -> Result<usize, AppError>;
+    /// RF-37/RF-38: marca al socio como retirado, registra la fecha y el saldo incobrable.
+    fn marcar_retiro(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+        estatus: EstatusSocio,
+        fecha_retiro: &str,
+        saldo_incobrable: f64,
+    ) -> Result<(), AppError>;
+    /// RF-73: socios retirados con deuda pendiente (RETIRADO_CON_DEUDA).
+    /// Roster sin allegados, igual que `listar`.
+    fn listar_retirados_con_deuda(&self, banco_id: &str) -> Result<Vec<Socio>, AppError>;
+    /// RF-74/RF-76: reduce el saldo_incobrable de un socio retirado. Si llega a 0,
+    /// el estatus cambia a RETIRADO_DEUDA_SALDADA.
+    fn abonar_deuda_incobrable(
+        &self,
+        banco_id: &str,
+        socio_id: &str,
+        monto: f64,
+    ) -> Result<f64, AppError>;
 }
 
 #[cfg(test)]
@@ -193,11 +196,4 @@ mod tests {
         assert_eq!(EstatusSocio::desde_str(""), EstatusSocio::Activo);
     }
 
-    #[test]
-    fn solo_activo_cuenta_como_no_retirado() {
-        assert!(!EstatusSocio::Activo.esta_retirado());
-        assert!(EstatusSocio::RetiradoVoluntario.esta_retirado());
-        assert!(EstatusSocio::RetiradoConDeuda.esta_retirado());
-        assert!(EstatusSocio::RetiradoDeudaSaldada.esta_retirado());
-    }
 }

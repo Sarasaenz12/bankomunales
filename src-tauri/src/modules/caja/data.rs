@@ -1,4 +1,4 @@
-use rusqlite::params;
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::core::db::DbManager;
 use crate::core::error::AppError;
@@ -8,6 +8,90 @@ use crate::modules::configuracion::domain::ConfiguracionPort;
 use super::domain::{
     Bien, BienPort, CodigoOperacion, FiltroLibro, FondoGastosPort, LibroPort, Movimiento, TipoBien,
 };
+
+// ── SQL del Libro y del Fondo, en funciones sobre `&Connection` para poder reusarlas
+//    tanto sueltas como dentro de una transacción compartida (atomicidad del asiento). ──
+
+fn insertar_movimiento(conn: &Connection, mov: &Movimiento) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO movimiento_libro
+         (id, socio_id, credito_id, numero, fecha, codigo, descripcion,
+          ingreso, egreso, saldo, cierre_mes_id, corregido)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0)",
+        params![
+            mov.id,
+            mov.socio_id,
+            mov.credito_id,
+            mov.numero,
+            mov.fecha,
+            mov.codigo.as_str(),
+            mov.descripcion,
+            mov.ingreso,
+            mov.egreso,
+            mov.saldo,
+            mov.cierre_mes_id,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Devuelve cuántas filas se actualizaron (0 = el movimiento no existe).
+fn actualizar_movimiento(conn: &Connection, mov: &Movimiento) -> Result<usize, AppError> {
+    let filas = conn.execute(
+        "UPDATE movimiento_libro SET
+            fecha = ?2, descripcion = ?3, ingreso = ?4, egreso = ?5,
+            corregido = ?6, corregido_por = ?7, fecha_correccion = ?8,
+            motivo_correccion = ?9
+         WHERE id = ?1",
+        params![
+            mov.id,
+            mov.fecha,
+            mov.descripcion,
+            mov.ingreso,
+            mov.egreso,
+            i64::from(mov.corregido),
+            mov.corregido_por,
+            mov.fecha_correccion,
+            mov.motivo_correccion,
+        ],
+    )?;
+    Ok(filas)
+}
+
+/// Reajusta el saldo acumulado del Fondo para Gastos. La fila de configuración debe
+/// existir de antemano (se siembra antes de abrir la transacción).
+fn ajustar_fondo_gastos(conn: &Connection, banco_id: &str, delta: f64) -> Result<(), AppError> {
+    let filas = conn.execute(
+        "UPDATE configuracion
+            SET saldo_fondo_gastos = COALESCE(saldo_fondo_gastos, 0) + ?2
+          WHERE id = ?1",
+        params![banco_id, delta],
+    )?;
+    if filas == 0 {
+        return Err(AppError::ConfiguracionNoEncontrada);
+    }
+    Ok(())
+}
+
+/// Recalcula la columna `saldo` de todo el Libro en orden cronológico.
+fn recalcular_saldos_en(conn: &Connection) -> Result<(), AppError> {
+    let filas: Vec<(String, f64, f64)> = {
+        let sql = format!("SELECT id, ingreso, egreso FROM movimiento_libro {ORDEN_LIBRO}");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    let mut acumulado = 0.0;
+    for (id, ingreso, egreso) in filas {
+        acumulado += ingreso - egreso;
+        conn.execute(
+            "UPDATE movimiento_libro SET saldo = ?2 WHERE id = ?1",
+            params![id, acumulado],
+        )?;
+    }
+    Ok(())
+}
 
 const SELECT_MOV: &str = "SELECT id, numero, fecha, codigo, descripcion, ingreso, egreso, saldo,
             socio_id, credito_id, cierre_mes_id, corregido, corregido_por,
@@ -51,62 +135,63 @@ fn fila_a_movimiento(row: &rusqlite::Row) -> rusqlite::Result<Movimiento> {
 /// Adaptador SQLite del Libro de Ingresos y Egresos.
 pub struct SqliteLibro {
     db: DbManager,
+    /// Para sembrar la fila de configuración (donde vive el saldo del Fondo para Gastos)
+    /// antes de ajustarla dentro de la transacción del asiento.
+    config: SqliteConfiguracion,
 }
 
 impl SqliteLibro {
     pub fn new(db: DbManager) -> Self {
-        Self { db }
+        Self {
+            config: SqliteConfiguracion::new(db.clone()),
+            db,
+        }
     }
 }
 
 impl LibroPort for SqliteLibro {
-    fn registrar(&self, banco_id: &str, mov: &Movimiento) -> Result<(), AppError> {
-        let conn = self.db.open_banco_db(banco_id)?;
-        conn.execute(
-            "INSERT INTO movimiento_libro
-             (id, socio_id, credito_id, numero, fecha, codigo, descripcion,
-              ingreso, egreso, saldo, cierre_mes_id, corregido)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0)",
-            params![
-                mov.id,
-                mov.socio_id,
-                mov.credito_id,
-                mov.numero,
-                mov.fecha,
-                mov.codigo.as_str(),
-                mov.descripcion,
-                mov.ingreso,
-                mov.egreso,
-                mov.saldo,
-                mov.cierre_mes_id,
-            ],
-        )?;
+    fn registrar_con_ajuste_fondo(
+        &self,
+        banco_id: &str,
+        mov: &Movimiento,
+        delta_fondo: f64,
+    ) -> Result<(), AppError> {
+        // Si el asiento toca el Fondo para Gastos, su fila debe existir antes de la
+        // transacción (la siembra lee la identidad del catálogo, en un solo lugar).
+        if delta_fondo != 0.0 {
+            self.config.obtener(banco_id)?;
+        }
+        let mut conn = self.db.open_banco_db(banco_id)?;
+        let tx = conn.transaction()?;
+        insertar_movimiento(&tx, mov)?;
+        if delta_fondo != 0.0 {
+            ajustar_fondo_gastos(&tx, banco_id, delta_fondo)?;
+        }
+        recalcular_saldos_en(&tx)?;
+        tx.commit()?;
         Ok(())
     }
 
-    fn actualizar(&self, banco_id: &str, mov: &Movimiento) -> Result<(), AppError> {
-        let conn = self.db.open_banco_db(banco_id)?;
-        let filas = conn.execute(
-            "UPDATE movimiento_libro SET
-                fecha = ?2, descripcion = ?3, ingreso = ?4, egreso = ?5,
-                corregido = ?6, corregido_por = ?7, fecha_correccion = ?8,
-                motivo_correccion = ?9
-             WHERE id = ?1",
-            params![
-                mov.id,
-                mov.fecha,
-                mov.descripcion,
-                mov.ingreso,
-                mov.egreso,
-                i64::from(mov.corregido),
-                mov.corregido_por,
-                mov.fecha_correccion,
-                mov.motivo_correccion,
-            ],
-        )?;
-        if filas == 0 {
+    fn actualizar_con_ajuste_fondo(
+        &self,
+        banco_id: &str,
+        mov: &Movimiento,
+        delta_fondo: f64,
+    ) -> Result<(), AppError> {
+        if delta_fondo != 0.0 {
+            self.config.obtener(banco_id)?;
+        }
+        let mut conn = self.db.open_banco_db(banco_id)?;
+        let tx = conn.transaction()?;
+        if actualizar_movimiento(&tx, mov)? == 0 {
+            // La transacción se descarta al salir sin commit (rollback).
             return Err(AppError::MovimientoNoEncontrado);
         }
+        if delta_fondo != 0.0 {
+            ajustar_fondo_gastos(&tx, banco_id, delta_fondo)?;
+        }
+        recalcular_saldos_en(&tx)?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -149,27 +234,19 @@ impl LibroPort for SqliteLibro {
         Ok(maximo + 1)
     }
 
-    fn recalcular_saldos(&self, banco_id: &str) -> Result<(), AppError> {
-        let mut conn = self.db.open_banco_db(banco_id)?;
-        let tx = conn.transaction()?;
-
-        let filas: Vec<(String, f64, f64)> = {
-            let sql = format!("SELECT id, ingreso, egreso FROM movimiento_libro {ORDEN_LIBRO}");
-            let mut stmt = tx.prepare(&sql)?;
-            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-
-        let mut acumulado = 0.0;
-        for (id, ingreso, egreso) in filas {
-            acumulado += ingreso - egreso;
-            tx.execute(
-                "UPDATE movimiento_libro SET saldo = ?2 WHERE id = ?1",
-                params![id, acumulado],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
+    fn ultimo_saldo(&self, banco_id: &str) -> Result<f64, AppError> {
+        let conn = self.db.open_banco_db(banco_id)?;
+        // Mismo orden que el Libro (fecha, numero), pero sólo la última fila: el saldo
+        // acumulado final. `COALESCE` cubre el Libro vacío.
+        let saldo: f64 = conn.query_row(
+            "SELECT COALESCE(saldo, 0) FROM movimiento_libro
+             ORDER BY fecha DESC, numero DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0.0);
+        Ok(saldo)
     }
 }
 
@@ -213,21 +290,6 @@ impl FondoGastosPort for SqliteFondoGastos {
             |r| r.get(0),
         )?;
         Ok(saldo)
-    }
-
-    fn ajustar(&self, banco_id: &str, delta: f64) -> Result<(), AppError> {
-        self.asegurar_configuracion(banco_id)?;
-        let conn = self.db.open_banco_db(banco_id)?;
-        let filas = conn.execute(
-            "UPDATE configuracion
-                SET saldo_fondo_gastos = COALESCE(saldo_fondo_gastos, 0) + ?2
-              WHERE id = ?1",
-            params![banco_id, delta],
-        )?;
-        if filas == 0 {
-            return Err(AppError::ConfiguracionNoEncontrada);
-        }
-        Ok(())
     }
 }
 
@@ -285,7 +347,9 @@ impl BienPort for SqliteBienes {
     fn valor_total(&self, banco_id: &str) -> Result<f64, AppError> {
         let conn = self.db.open_banco_db(banco_id)?;
         let total: f64 = conn.query_row(
-            "SELECT COALESCE(SUM(valor), 0) FROM bien",
+            // Sólo los bienes PROPIOS son Activo del Bankomunal; el comodato es de un
+            // tercero y queda fuera del valor del activo fijo (D-20 c).
+            "SELECT COALESCE(SUM(valor), 0) FROM bien WHERE tipo = 'PROPIO'",
             [],
             |r| r.get(0),
         )?;
