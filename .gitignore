@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Datos locales / demos
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.xlsx
+src-tauri/check_output.txt
+src-tauri/test_out.txt
