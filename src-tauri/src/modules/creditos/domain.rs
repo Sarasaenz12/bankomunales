@@ -402,7 +402,7 @@ fn redondear(v: f64) -> f64 {
     v.round()
 }
 
-/// --- Puertos (hexagonal) ---
+// --- Puertos (hexagonal) ---
 
 pub trait SolicitudPort: Send + Sync {
     fn crear(

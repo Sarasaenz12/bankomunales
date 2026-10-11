@@ -43,7 +43,6 @@ fn main() {
         Arc::new(SqliteAppSettings::new(db.clone())),
         Arc::new(BcryptHasher),
         Arc::new(SqliteBancoCatalogo::new(db.clone())),
-        db.clone(),
     );
     auth.inicializar().unwrap();
 
@@ -76,7 +75,7 @@ fn main() {
     let acciones = Arc::new(AccionesService::new(
         Arc::new(bankomunales_lib::modules::acciones::data::SqliteLotesAcciones::new(db.clone())),
         Arc::new(bankomunales_lib::modules::acciones::data::SqliteParametrosAcciones::new(db.clone())),
-        Arc::new(bankomunales_lib::modules::acciones::data::LibroViaCaja::new(caja.clone())),
+        Arc::new(bankomunales_lib::modules::caja::puente::LibroViaCaja::new(caja.clone())),
         Arc::new(bankomunales_lib::modules::acciones::data::SqliteCierres::new(db.clone())),
     ));
     let creditos = Arc::new(CreditoService::new(
@@ -85,7 +84,7 @@ fn main() {
         Arc::new(bankomunales_lib::modules::creditos::data::ParametrosCreditoAdapter::new(db.clone())),
         Arc::new(bankomunales_lib::modules::creditos::data::AccionesParaCreditoAdapter::new(db.clone())),
         Arc::new(bankomunales_lib::modules::creditos::data::SociosParaCreditoAdapter::new(db.clone())),
-        Arc::new(bankomunales_lib::modules::creditos::data::LibroViaCaja::new(caja.clone())),
+        Arc::new(bankomunales_lib::modules::caja::puente::LibroViaCaja::new(caja.clone())),
     ));
     let cierre = CierreService::new(
         Arc::new(bankomunales_lib::modules::cierre::data::SqliteCierres::new(db.clone())),
@@ -96,8 +95,9 @@ fn main() {
         Arc::new(bankomunales_lib::modules::cierre::data::SqliteFondosCierre::new(db.clone())),
         Arc::new(bankomunales_lib::modules::cierre::data::SqliteLotesCierre::new(db.clone())),
         Arc::new(bankomunales_lib::modules::cierre::data::SqliteSociosCierre::new(db.clone())),
-        Arc::new(bankomunales_lib::modules::cierre::data::LibroViaCaja::new(caja.clone())),
+        Arc::new(bankomunales_lib::modules::caja::puente::LibroViaCaja::new(caja.clone())),
         Arc::new(SqliteAuditoria::new(db.clone())),
+        Arc::new(bankomunales_lib::core::atomicidad::SqliteAtomicidad::new(db.clone())),
     );
 
     // Config por defecto (valor nominal 10.000, tasas, % de garantía 20/20) y fecha de

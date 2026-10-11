@@ -188,6 +188,7 @@ impl CajaService {
     ///
     /// Antes del Cierre de Mes basta con corregirla. Después, el sistema exige el nombre
     /// de quien corrige y el motivo, y deja registro en Auditoría (RNF-08).
+    #[allow(clippy::too_many_arguments)]
     pub fn corregir_operacion(
         &self,
         banco_id: &str,

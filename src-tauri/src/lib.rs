@@ -17,20 +17,22 @@ use crate::modules::respaldo::presentation::{
 };
 use crate::modules::socios::application::SocioService;
 use crate::modules::socios::data::SqliteSocios;
+use core::atomicidad::SqliteAtomicidad;
 use core::db::DbManager;
 use core::error::AppError;
 use modules::acciones::application::AccionesService;
 use modules::acciones::data::{
-    LibroViaCaja, SqliteCierres, SqliteLotesAcciones, SqliteParametrosAcciones,
+    SqliteCierres, SqliteLotesAcciones, SqliteParametrosAcciones,
 };
 use modules::auditoria::data::SqliteAuditoria;
 use modules::auth::application::AuthService;
 use modules::auth::data::{BcryptHasher, SqliteAppSettings, SqliteBancoCatalogo};
 use modules::caja::application::CajaService;
+use modules::caja::puente::LibroViaCaja;
 use modules::caja::data::{SqliteBienes, SqliteFondoGastos, SqliteLibro};
 use modules::cierre::application::CierreService;
 use modules::cierre::data::{
-    LibroViaCaja as LibroViaCajaCierre, SqliteBienesCierre, SqliteCartera,
+    SqliteBienesCierre, SqliteCartera,
     SqliteCierres as SqliteCierresCierre, SqliteFondosCierre, SqliteLibroCierre, SqliteLotesCierre,
     SqliteReparto, SqliteSociosCierre,
 };
@@ -38,12 +40,14 @@ use modules::configuracion::application::ConfigService;
 use modules::configuracion::data::SqliteConfiguracion;
 use modules::creditos::application::CreditoService;
 use modules::creditos::data::{
-    AccionesParaCreditoAdapter, LibroViaCaja as LibroViaCajaCreditos, ParametrosCreditoAdapter,
+    AccionesParaCreditoAdapter, ParametrosCreditoAdapter,
     SociosParaCreditoAdapter, SqliteCreditos, SqliteSolicitudes,
 };
 use modules::deuda::application::DeudaService;
+use modules::liquidacion::application::LiquidacionService;
+
 use modules::deuda::data::{
-    LibroViaCaja as LibroViaCajaDeuda, SqliteCreditoConsulta, SqliteCuotas, SqliteParametrosDeuda,
+    SqliteCreditoConsulta, SqliteCuotas, SqliteParametrosDeuda,
 };
 use modules::reportes::application::ReportesService;
 use modules::reportes::data::SqliteReportes;
@@ -54,21 +58,28 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // Ruta de datos de la app: %APPDATA%/com.estra.bankomunales
-            let app_path = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| AppError::Serde(e.to_string()))?;
+            // Ruta de datos de la app: %APPDATA%/com.estra.bankomunales. Con la variable
+            // BANKOMUNALES_DATA_DIR se usa otra carpeta (demos, capturas, pruebas manuales)
+            // sin tocar los datos reales.
+            let app_path = match std::env::var_os("BANKOMUNALES_DATA_DIR") {
+                Some(dir) => std::path::PathBuf::from(dir),
+                None => app
+                    .path()
+                    .app_data_dir()
+                    .map_err(|e| AppError::Serde(e.to_string()))?,
+            };
             std::fs::create_dir_all(&app_path)?;
 
             let db = DbManager::new(app_path);
+            // Si la app murió en medio de una operación atómica, la deja como estaba antes.
+            db.recuperar_operaciones_interrumpidas()?;
 
             // Composición de dependencias (hexagonal): adaptadores concretos → servicios.
             let settings = Arc::new(SqliteAppSettings::new(db.clone()));
             let hasher = Arc::new(BcryptHasher);
             let catalogo = Arc::new(SqliteBancoCatalogo::new(db.clone()));
 
-            let auth = Arc::new(AuthService::new(settings, hasher, catalogo, db.clone()));
+            let auth = Arc::new(AuthService::new(settings, hasher, catalogo));
             // Primer uso: siembra los hashes por defecto (contraseña genérica y clave config).
             auth.inicializar()?;
 
@@ -100,7 +111,7 @@ pub fn run() {
                 Arc::new(ParametrosCreditoAdapter::new(db.clone())),
                 Arc::new(AccionesParaCreditoAdapter::new(db.clone())),
                 Arc::new(SociosParaCreditoAdapter::new(db.clone())),
-                Arc::new(LibroViaCajaCreditos::new(caja.clone())),
+                Arc::new(LibroViaCaja::new(caja.clone())),
             ));
 
             let cierre: Arc<CierreService> = Arc::new(CierreService::new(
@@ -112,16 +123,28 @@ pub fn run() {
                 Arc::new(SqliteFondosCierre::new(db.clone())),
                 Arc::new(SqliteLotesCierre::new(db.clone())),
                 Arc::new(SqliteSociosCierre::new(db.clone())),
-                Arc::new(LibroViaCajaCierre::new(caja.clone())),
+                Arc::new(LibroViaCaja::new(caja.clone())),
                 Arc::new(SqliteAuditoria::new(db.clone())),
+                Arc::new(SqliteAtomicidad::new(db.clone())),
             ));
 
             let deuda: Arc<DeudaService> = Arc::new(DeudaService::new(
                 Arc::new(SqliteCreditoConsulta::new(db.clone())),
                 Arc::new(SqliteCuotas::new(db.clone())),
-                Arc::new(LibroViaCajaDeuda::new(caja.clone())),
+                Arc::new(LibroViaCaja::new(caja.clone())),
                 Arc::new(SqliteParametrosDeuda::new(db.clone())),
                 Arc::new(SqliteAuditoria::new(db.clone())),
+                Arc::new(SqliteAtomicidad::new(db.clone())),
+            ));
+
+            let liquidacion: Arc<LiquidacionService> = Arc::new(LiquidacionService::new(
+                socios.clone(),
+                acciones.clone(),
+                creditos.clone(),
+                cierre.clone(),
+                caja.clone(),
+                config.clone(),
+                Arc::new(SqliteAtomicidad::new(db.clone())),
             ));
 
             let reportes: Arc<ReportesService> = Arc::new(ReportesService::new(Arc::new(
@@ -134,7 +157,8 @@ pub fn run() {
                 })));
 
             app.manage(AppState::new(
-                auth, config, socios, caja, acciones, creditos, cierre, deuda, reportes, respaldo,
+                auth, config, socios, caja, acciones, creditos, cierre, deuda, liquidacion, reportes,
+                respaldo,
             ));
             Ok(())
         })

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
+use crate::core::atomicidad::{atomico, AtomicidadPort};
 use crate::core::error::AppError;
 use crate::modules::auditoria::domain::{tipo_accion, AuditoriaPort, EntradaAuditoria};
 
@@ -24,6 +25,7 @@ pub struct DeudaService {
     libro: Arc<dyn LibroDeudaPort>,
     parametros: Arc<dyn ParametrosDeudaPort>,
     auditoria: Arc<dyn AuditoriaPort>,
+    atomicidad: Arc<dyn AtomicidadPort>,
 }
 
 impl DeudaService {
@@ -33,8 +35,9 @@ impl DeudaService {
         libro: Arc<dyn LibroDeudaPort>,
         parametros: Arc<dyn ParametrosDeudaPort>,
         auditoria: Arc<dyn AuditoriaPort>,
+        atomicidad: Arc<dyn AtomicidadPort>,
     ) -> Self {
-        Self { creditos, cuotas, libro, parametros, auditoria }
+        Self { creditos, cuotas, libro, parametros, auditoria, atomicidad }
     }
 
     /// RF-63: estado de un crédito por número, con sus cuotas, para la pantalla de pago.
@@ -56,6 +59,19 @@ impl DeudaService {
     /// RF-64 a RF-72: registra el pago de una cuota. `monto` se imputa en cascada
     /// mora → interés → capital y no puede exceder lo que la cuota debe hoy (RF-68).
     pub fn registrar_pago_cuota(
+        &self,
+        banco_id: &str,
+        numero_credito: &str,
+        numero_cuota: i64,
+        fecha_pago: &str,
+        monto: f64,
+    ) -> Result<ResultadoPago, AppError> {
+        atomico(&*self.atomicidad, banco_id, || {
+            self.aplicar_pago_cuota(banco_id, numero_credito, numero_cuota, fecha_pago, monto)
+        })
+    }
+
+    fn aplicar_pago_cuota(
         &self,
         banco_id: &str,
         numero_credito: &str,
@@ -177,6 +193,18 @@ impl DeudaService {
         fecha: &str,
         monto: f64,
     ) -> Result<ResultadoAbono, AppError> {
+        atomico(&*self.atomicidad, banco_id, || {
+            self.aplicar_abono_capital(banco_id, numero_credito, fecha, monto)
+        })
+    }
+
+    fn aplicar_abono_capital(
+        &self,
+        banco_id: &str,
+        numero_credito: &str,
+        fecha: &str,
+        monto: f64,
+    ) -> Result<ResultadoAbono, AppError> {
         let fecha = fecha.trim();
         if fecha.is_empty() {
             return Err(AppError::OperacionNoPermitida("Debe indicar la fecha del abono".into()));
@@ -263,6 +291,18 @@ impl DeudaService {
     /// se cobra **un solo interés** (el de la cuota en curso), la mora de esa cuota si hay
     /// atraso, y el **capital de las N cuotas**; ese capital re-amortiza el saldo restante.
     pub fn pagar_cuotas(
+        &self,
+        banco_id: &str,
+        numero_credito: &str,
+        fecha: &str,
+        cantidad: i64,
+    ) -> Result<ResultadoPago, AppError> {
+        atomico(&*self.atomicidad, banco_id, || {
+            self.aplicar_pago_de_cuotas(banco_id, numero_credito, fecha, cantidad)
+        })
+    }
+
+    fn aplicar_pago_de_cuotas(
         &self,
         banco_id: &str,
         numero_credito: &str,
@@ -407,9 +447,10 @@ mod tests {
     use crate::modules::caja::application::CajaService;
     use crate::modules::caja::data::{SqliteBienes, SqliteFondoGastos, SqliteLibro};
     use crate::modules::configuracion::data::SqliteConfiguracion;
+    use crate::modules::caja::puente::LibroViaCaja;
     use crate::modules::configuracion::domain::ConfiguracionPort;
     use crate::modules::deuda::data::{
-        LibroViaCaja, SqliteCreditoConsulta, SqliteCuotas, SqliteParametrosDeuda,
+        SqliteCreditoConsulta, SqliteCuotas, SqliteParametrosDeuda,
     };
     use uuid::Uuid;
 
@@ -453,6 +494,7 @@ mod tests {
             Arc::new(LibroViaCaja::new(caja.clone())),
             Arc::new(SqliteParametrosDeuda::new(db.clone())),
             Arc::new(SqliteAuditoria::new(db.clone())),
+            Arc::new(crate::core::atomicidad::SqliteAtomicidad::new(db.clone())),
         );
         Ctx { deuda, caja, db, banco }
     }

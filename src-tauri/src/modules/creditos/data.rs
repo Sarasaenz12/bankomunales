@@ -1,16 +1,13 @@
-use std::sync::Arc;
 
 use rusqlite::params;
 
 use crate::core::db::DbManager;
 use crate::core::error::AppError;
-use crate::modules::caja::application::CajaService;
-use crate::modules::caja::domain::CodigoOperacion;
 use crate::modules::configuracion::data::SqliteConfiguracion;
 use crate::modules::configuracion::domain::ConfiguracionPort;
 use crate::modules::creditos::domain::{
     AccionesParaCreditoPort, Credito, CreditoPort, CuotaPlaneada, DestinoCredito, EstadoCredito,
-    EstadoSolicitud, GarantiaCredito, GarantiaSolicitud, LibroContablePort, ParametrosCredito,
+    EstadoSolicitud, GarantiaCredito, GarantiaSolicitud, ParametrosCredito,
     ParametrosCreditoPort, RolGarantia, SociosParaCreditoPort, SolicitudCredito, SolicitudPort,
 };
 
@@ -666,105 +663,3 @@ impl SociosParaCreditoPort for SociosParaCreditoAdapter {
     }
 }
 
-/// Puente entre Créditos y el Libro de Ingresos y Egresos (RF-62).
-///
-/// El Libro —su consecutivo, su saldo acumulado y su recálculo— es responsabilidad del
-/// módulo de Caja. Créditos no reimplementa nada de eso: le pide a `CajaService` que
-/// asiente el desembolso, de modo que la contabilidad siga teniendo un solo dueño.
-pub struct LibroViaCaja {
-    caja: Arc<CajaService>,
-}
-
-impl LibroViaCaja {
-    pub fn new(caja: Arc<CajaService>) -> Self {
-        Self { caja }
-    }
-}
-
-impl LibroContablePort for LibroViaCaja {
-    fn registrar_desembolso(
-        &self,
-        banco_id: &str,
-        fecha: &str,
-        monto: f64,
-        socio_id: &str,
-        credito_id: &str,
-        descripcion: &str,
-    ) -> Result<(), AppError> {
-        self.caja
-            .registrar_asiento_de_modulo(
-                banco_id,
-                CodigoOperacion::DesembolsoCredito,
-                fecha.to_string(),
-                monto,
-                descripcion.to_string(),
-                Some(socio_id.to_string()),
-                Some(credito_id.to_string()),
-            )
-            .map(|_| ())
-    }
-
-    fn registrar_refinanciamiento(
-        &self,
-        banco_id: &str,
-        fecha: &str,
-        monto: f64,
-        socio_id: &str,
-        credito_id: &str,
-        descripcion: &str,
-    ) -> Result<(), AppError> {
-        self.caja
-            .registrar_asiento_de_modulo(
-                banco_id,
-                CodigoOperacion::Refinanciamiento,
-                fecha.to_string(),
-                monto,
-                descripcion.to_string(),
-                Some(socio_id.to_string()),
-                Some(credito_id.to_string()),
-            )
-            .map(|_| ())
-    }
-
-    fn registrar_interes_ordinario(
-        &self,
-        banco_id: &str,
-        fecha: &str,
-        monto: f64,
-        socio_id: &str,
-        credito_id: &str,
-    ) -> Result<(), AppError> {
-        self.caja
-            .registrar_asiento_de_modulo(
-                banco_id,
-                CodigoOperacion::InteresOrdinario,
-                fecha.to_string(),
-                monto,
-                "Interés ordinario saldado al refinanciar".to_string(),
-                Some(socio_id.to_string()),
-                Some(credito_id.to_string()),
-            )
-            .map(|_| ())
-    }
-
-    fn registrar_mora(
-        &self,
-        banco_id: &str,
-        fecha: &str,
-        monto: f64,
-        socio_id: &str,
-        credito_id: &str,
-    ) -> Result<(), AppError> {
-        self.caja
-            .registrar_asiento_de_modulo(
-                banco_id,
-                CodigoOperacion::InteresMora,
-                fecha.to_string(),
-                monto,
-                "Mora saldada al refinanciar".to_string(),
-                Some(socio_id.to_string()),
-                Some(credito_id.to_string()),
-            )
-            .map(|_| ())
-    }
-}

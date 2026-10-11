@@ -229,6 +229,7 @@ pub trait CuotaPort: Send + Sync {
     /// borra las cuotas NO pagadas con `numero >= desde_numero`, inserta el plan `nuevas`
     /// y actualiza el crédito (saldo, cuota actual, estatus). Usado por el abono a capital
     /// y por el pago de varias cuotas.
+    #[allow(clippy::too_many_arguments)]
     fn reamortizar(
         &self,
         banco_id: &str,

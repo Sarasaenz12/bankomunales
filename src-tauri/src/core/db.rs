@@ -1,5 +1,12 @@
 use rusqlite::Connection;
 use std::path::PathBuf;
+use std::cell::Cell;
+use std::sync::{Arc, Mutex};
+
+thread_local! {
+    /// Este hilo ya está dentro de una operación atómica (se permite anidar).
+    static EN_OPERACION: Cell<bool> = const { Cell::new(false) };
+}
 
 use super::error::AppError;
 
@@ -30,11 +37,14 @@ const BANCO_MIGRATIONS: &[&str] = &[
 #[derive(Clone)]
 pub struct DbManager {
     app_data_dir: PathBuf,
+    /// Serializa las operaciones atómicas multi-módulo (ver `en_operacion_atomica`).
+    /// Se comparte entre clones, así que vale para todos los servicios de la app.
+    operacion: Arc<Mutex<()>>,
 }
 
 impl DbManager {
     pub fn new(app_data_dir: PathBuf) -> Self {
-        Self { app_data_dir }
+        Self { app_data_dir, operacion: Arc::new(Mutex::new(())) }
     }
 
     /// Ruta del `app.db` (catálogo global de Bankomunales).
@@ -67,6 +77,77 @@ impl DbManager {
         let mut conn = Connection::open(path)?;
         self.migrate(&mut conn, BANCO_MIGRATIONS)?;
         Ok(conn)
+    }
+
+    /// Ruta de la copia de seguridad previa a una operación atómica.
+    fn snapshot_path(&self, banco_id: &str) -> PathBuf {
+        self.banco_db_path(banco_id).with_extension("db.snap")
+    }
+
+    /// Ejecuta `f` como una sola unidad: o se aplican todos sus cambios o ninguno.
+    ///
+    /// Los casos de uso que cruzan varios módulos (retiro de socio, venta parcial) escriben
+    /// por conexiones distintas, así que no caben en una transacción SQLite. Se resuelve con
+    /// una copia consistente (`VACUUM INTO`) tomada antes de empezar: si `f` falla se
+    /// restaura; si el proceso muere a la mitad, `recuperar_operaciones_interrumpidas`
+    /// la restaura al próximo arranque. Si ya se está dentro de una operación atómica
+    /// (un caso de uso que llama a otro), la interna se une a la externa.
+    pub fn en_operacion_atomica<T>(
+        &self,
+        banco_id: &str,
+        f: impl FnOnce() -> Result<T, AppError>,
+    ) -> Result<T, AppError> {
+        if EN_OPERACION.with(Cell::get) {
+            return f();
+        }
+        let _candado = self.operacion.lock().unwrap_or_else(|e| e.into_inner());
+        EN_OPERACION.with(|c| c.set(true));
+        let resultado = self.con_copia_previa(banco_id, f);
+        EN_OPERACION.with(|c| c.set(false));
+        resultado
+    }
+
+    fn con_copia_previa<T>(
+        &self,
+        banco_id: &str,
+        f: impl FnOnce() -> Result<T, AppError>,
+    ) -> Result<T, AppError> {
+        let snap = self.snapshot_path(banco_id);
+        if snap.exists() {
+            std::fs::remove_file(&snap)?;
+        }
+        {
+            let conn = self.open_banco_db(banco_id)?;
+            conn.execute("VACUUM INTO ?1", [snap.to_string_lossy().as_ref()])?;
+        }
+        match f() {
+            Ok(v) => {
+                std::fs::remove_file(&snap).ok();
+                Ok(v)
+            }
+            Err(e) => {
+                std::fs::copy(&snap, self.banco_db_path(banco_id))?;
+                std::fs::remove_file(&snap).ok();
+                Err(e)
+            }
+        }
+    }
+
+    /// Si la app murió en medio de una operación atómica, queda la copia previa junto al
+    /// `.db`: se restaura para no arrancar con una operación a medias.
+    pub fn recuperar_operaciones_interrumpidas(&self) -> Result<(), AppError> {
+        let dir = self.app_data_dir.join("bankomunales");
+        let Ok(entradas) = std::fs::read_dir(&dir) else {
+            return Ok(());
+        };
+        for entrada in entradas.flatten() {
+            let snap = entrada.path();
+            if snap.extension().and_then(|e| e.to_str()) == Some("snap") {
+                std::fs::copy(&snap, snap.with_extension(""))?;
+                std::fs::remove_file(&snap)?;
+            }
+        }
+        Ok(())
     }
 
     /// Aplica en orden las migraciones que le falten a la base: lee `PRAGMA user_version`
@@ -447,6 +528,82 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM socio", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn contar_socios(mgr: &DbManager, id: &str) -> i64 {
+        mgr.open_banco_db(id)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM socio", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    fn insertar_socio(mgr: &DbManager, id: &str, cedula: &str) {
+        mgr.open_banco_db(id)
+            .unwrap()
+            .execute(
+                "INSERT INTO socio (id, cedula, nombres, apellidos, profesion, direccion, telefono,
+                                    celular, correo, estatus, fecha_ingreso)
+                 VALUES (?1, ?1, 'N', 'A', '', '', '', '', '', 'ACTIVO', '2026-01-01')",
+                [cedula],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn la_operacion_atomica_que_falla_deja_la_base_como_estaba() {
+        let dir = temp_dir();
+        let mgr = DbManager::new(dir.clone());
+        let id = Uuid::new_v4().to_string();
+        insertar_socio(&mgr, &id, "1");
+
+        let r: Result<(), AppError> = mgr.en_operacion_atomica(&id, || {
+            insertar_socio(&mgr, &id, "2");
+            insertar_socio(&mgr, &id, "3");
+            Err(AppError::OperacionNoPermitida("falla a la mitad".into()))
+        });
+
+        assert!(r.is_err());
+        assert_eq!(contar_socios(&mgr, &id), 1);
+        assert!(!mgr.snapshot_path(&id).exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn la_operacion_atomica_que_termina_conserva_los_cambios() {
+        let dir = temp_dir();
+        let mgr = DbManager::new(dir.clone());
+        let id = Uuid::new_v4().to_string();
+        insertar_socio(&mgr, &id, "1");
+
+        mgr.en_operacion_atomica(&id, || {
+            insertar_socio(&mgr, &id, "2");
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(contar_socios(&mgr, &id), 2);
+        assert!(!mgr.snapshot_path(&id).exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn una_operacion_interrumpida_se_revierte_al_arrancar() {
+        let dir = temp_dir();
+        let mgr = DbManager::new(dir.clone());
+        let id = Uuid::new_v4().to_string();
+        insertar_socio(&mgr, &id, "1");
+        // Simula la caída: queda la copia previa y la base con cambios a medias.
+        mgr.open_banco_db(&id)
+            .unwrap()
+            .execute("VACUUM INTO ?1", [mgr.snapshot_path(&id).to_string_lossy().as_ref()])
+            .unwrap();
+        insertar_socio(&mgr, &id, "2");
+
+        mgr.recuperar_operaciones_interrumpidas().unwrap();
+
+        assert_eq!(contar_socios(&mgr, &id), 1);
+        assert!(!mgr.snapshot_path(&id).exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 }

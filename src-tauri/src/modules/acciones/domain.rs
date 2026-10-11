@@ -158,7 +158,7 @@ pub fn tramo_de_venta(ppcfc_pct: f64, params: &ParametrosAcciones) -> Option<(f6
     }
 }
 
-/// --- Puertos (hexagonal) ---
+// --- Puertos (hexagonal) ---
 
 pub trait LoteAccionesPort: Send + Sync {
     fn crear(&self, banco_id: &str, lote: &LoteAcciones) -> Result<(), AppError>;

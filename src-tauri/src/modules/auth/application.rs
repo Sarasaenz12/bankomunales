@@ -3,7 +3,6 @@ use std::sync::Arc;
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::core::db::DbManager;
 use crate::core::error::AppError;
 
 use super::domain::{
@@ -18,7 +17,6 @@ pub struct AuthService {
     settings: Arc<dyn AppSettingsPort>,
     hasher: Arc<dyn PasswordHasherPort>,
     catalogo: Arc<dyn BancoCatalogoPort>,
-    db: DbManager,
 }
 
 impl AuthService {
@@ -26,13 +24,11 @@ impl AuthService {
         settings: Arc<dyn AppSettingsPort>,
         hasher: Arc<dyn PasswordHasherPort>,
         catalogo: Arc<dyn BancoCatalogoPort>,
-        db: DbManager,
     ) -> Self {
         Self {
             settings,
             hasher,
             catalogo,
-            db,
         }
     }
 
@@ -117,13 +113,14 @@ impl AuthService {
     /// Abre (crea si falta) el `.db` del Bankomunal activo. Usado por otros módulos
     /// para operar sobre el archivo independiente del Banco (RF-08).
     pub fn abrir_banco_db(&self, banco_id: &str) -> Result<(), AppError> {
-        self.db.open_banco_db(banco_id).map(|_| ())
+        self.catalogo.preparar_almacen(banco_id)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::db::DbManager;
     use crate::modules::auth::data::{BcryptHasher, SqliteAppSettings, SqliteBancoCatalogo};
 
     fn test_services() -> AuthService {
@@ -133,8 +130,7 @@ mod tests {
         let auth = AuthService::new(
             Arc::new(SqliteAppSettings::new(db.clone())),
             Arc::new(BcryptHasher),
-            Arc::new(SqliteBancoCatalogo::new(db.clone())),
-            db,
+            Arc::new(SqliteBancoCatalogo::new(db)),
         );
         auth.inicializar().unwrap();
         auth
@@ -157,10 +153,8 @@ mod tests {
     #[test]
     fn password_incorrecta_devuelve_false() {
         let auth = test_services();
-        assert!(!auth.login("clave-mal".into()).unwrap());
+        assert!(!auth.login("clave-mal").unwrap());
     }
-
-    // (test eliminado: la clave de configuración ya no existe)
 
     #[test]
     fn nombre_duplicado_no_se_crea() {

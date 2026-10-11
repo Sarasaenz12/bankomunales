@@ -1,17 +1,14 @@
-use std::sync::Arc;
 
 use rusqlite::params;
 
 use crate::core::db::DbManager;
 use crate::core::error::AppError;
-use crate::modules::caja::application::CajaService;
-use crate::modules::caja::domain::CodigoOperacion;
 use crate::modules::configuracion::data::SqliteConfiguracion;
 use crate::modules::configuracion::domain::ConfiguracionPort;
 
 use super::domain::{
     BienesCierrePort, CarteraPort, CierreMes, CierresPort, Devengo, FilaLibro, FilaRepartoAnual,
-    FondosPort, GuardarCierre, LibroCierrePort, LibroContablePort, LoteActivo, LoteCompraMes,
+    FondosPort, GuardarCierre, LibroCierrePort, LoteActivo, LoteCompraMes,
     LoteResumenDevengo, LotesPort, PagoAnualSocio, ParametrosFondos, RepartoMes, RepartoPort,
     SociosCierrePort,
 };
@@ -682,36 +679,3 @@ impl SociosCierrePort for SqliteSociosCierre {
     }
 }
 
-/// Puente entre el Cierre y el Libro: el asiento UR lo registra Caja, que es el
-/// único dueño del consecutivo y del saldo acumulado (mismo patrón que Acciones).
-pub struct LibroViaCaja {
-    caja: Arc<CajaService>,
-}
-
-impl LibroViaCaja {
-    pub fn new(caja: Arc<CajaService>) -> Self {
-        Self { caja }
-    }
-}
-
-impl LibroContablePort for LibroViaCaja {
-    fn registrar_ganancia_repartida(
-        &self,
-        banco_id: &str,
-        fecha: &str,
-        monto: f64,
-        socio_id: &str,
-    ) -> Result<(), AppError> {
-        self.caja
-            .registrar_asiento_de_modulo(
-                banco_id,
-                CodigoOperacion::GananciaRepartida,
-                fecha.to_string(),
-                monto,
-                "Pago de ganancias (UR)".into(),
-                Some(socio_id.to_string()),
-                None,
-            )
-            .map(|_| ())
-    }
-}

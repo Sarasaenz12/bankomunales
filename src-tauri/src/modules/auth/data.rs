@@ -77,6 +77,10 @@ impl SqliteBancoCatalogo {
 }
 
 impl BancoCatalogoPort for SqliteBancoCatalogo {
+    fn preparar_almacen(&self, id: &str) -> Result<(), AppError> {
+        self.db.open_banco_db(id).map(|_| ())
+    }
+
     fn crear(&self, id: &str, fecha_creacion: &str, nuevo: &NuevoBankomunal) -> Result<Bankomunal, AppError> {
         let db_path = self
             .db

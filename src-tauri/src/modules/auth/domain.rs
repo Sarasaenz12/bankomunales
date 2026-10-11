@@ -28,7 +28,7 @@ pub const DEFAULT_PASSWORD_GENERICA: &str = "admin2026";
 /// Clave del app.db donde se guarda el hash de la contraseña de acceso.
 pub const SETTING_PASSWORD_HASH: &str = "password_hash";
 
-/// --- Puertos (hexagonal): contratos que implentará un adaptador SQLite. ---
+// --- Puertos (hexagonal): contratos que implementará un adaptador SQLite. ---
 
 /// Acceso a las parejas clave/valor del app.db (hash de contraseña, hash de clave de config).
 pub trait AppSettingsPort: Send + Sync {
@@ -49,4 +49,6 @@ pub trait BancoCatalogoPort: Send + Sync {
     fn listar(&self) -> Result<Vec<Bankomunal>, AppError>;
     fn buscar_por_nombre(&self, nombre: &str) -> Result<Option<Bankomunal>, AppError>;
     fn buscar_por_id(&self, id: &str) -> Result<Option<Bankomunal>, AppError>;
+    /// Abre (creando si falta) el almacén propio del Banco, aplicando sus migraciones (RF-08).
+    fn preparar_almacen(&self, id: &str) -> Result<(), AppError>;
 }

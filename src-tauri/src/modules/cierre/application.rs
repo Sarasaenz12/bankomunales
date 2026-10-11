@@ -3,7 +3,9 @@ use std::sync::Arc;
 use chrono::Utc;
 use uuid::Uuid;
 
+use crate::core::atomicidad::{atomico, AtomicidadPort};
 use crate::core::error::AppError;
+use crate::core::format::pesos;
 use crate::modules::acciones::domain::{calcular_ppcfc, meses_entre, MESES_PPCFC};
 use crate::modules::auditoria::domain::{tipo_accion, AuditoriaPort, EntradaAuditoria};
 
@@ -35,6 +37,7 @@ pub struct CierreService {
     socios: Arc<dyn SociosCierrePort>,
     libro_contable: Arc<dyn LibroContablePort>,
     auditoria: Arc<dyn AuditoriaPort>,
+    atomicidad: Arc<dyn AtomicidadPort>,
 }
 
 impl CierreService {
@@ -50,6 +53,7 @@ impl CierreService {
         socios: Arc<dyn SociosCierrePort>,
         libro_contable: Arc<dyn LibroContablePort>,
         auditoria: Arc<dyn AuditoriaPort>,
+        atomicidad: Arc<dyn AtomicidadPort>,
     ) -> Self {
         Self {
             cierres,
@@ -62,6 +66,7 @@ impl CierreService {
             socios,
             libro_contable,
             auditoria,
+            atomicidad,
         }
     }
 
@@ -275,6 +280,14 @@ impl CierreService {
             + fondo_incobrables
             + balance_neto;
         let cuadra = (activo_total - pasivo_total).abs() < 0.01;
+        if !cuadra {
+            return Err(AppError::OperacionNoPermitida(format!(
+                "No se puede cerrar {mes}: el balance no cuadra. Activo: ${}, pasivo: ${}, diferencia: ${}. Corrija los datos y vuelva a intentar.",
+                pesos(activo_total),
+                pesos(pasivo_total),
+                pesos((activo_total - pasivo_total).abs()),
+            )));
+        }
 
         // RF-96: colocación del mes y PPCFC (promedio de los 3 últimos cierres,
         // incluido éste). Sin 3 cierres el PPCFC no existe aún (D-02): se guarda 0 y
@@ -519,7 +532,9 @@ impl CierreService {
         banco_id: &str,
         fecha: &str,
     ) -> Result<Vec<PagoGananciaRegistrado>, AppError> {
-        self.pagar_lotes_que_cumplen(banco_id, fecha, None)
+        atomico(&*self.atomicidad, banco_id, || {
+            self.pagar_lotes_que_cumplen(banco_id, fecha, None)
+        })
     }
 
     /// RF-42 (RN-10): paga la ganancia acumulada sólo de los lotes de **un** socio que
@@ -530,7 +545,9 @@ impl CierreService {
         socio_id: &str,
         fecha: &str,
     ) -> Result<Vec<PagoGananciaRegistrado>, AppError> {
-        self.pagar_lotes_que_cumplen(banco_id, fecha, Some(socio_id))
+        atomico(&*self.atomicidad, banco_id, || {
+            self.pagar_lotes_que_cumplen(banco_id, fecha, Some(socio_id))
+        })
     }
 
     /// RF-28 (RN-10, D-13): al retirar un socio, salda sus devengos según el aniversario de
@@ -716,8 +733,9 @@ mod tests {
     use crate::modules::auditoria::data::SqliteAuditoria;
     use crate::modules::caja::application::CajaService;
     use crate::modules::caja::data::{SqliteBienes, SqliteFondoGastos, SqliteLibro};
+    use crate::modules::caja::puente::LibroViaCaja;
     use crate::modules::cierre::data::{
-        LibroViaCaja, SqliteBienesCierre, SqliteCartera, SqliteCierres, SqliteFondosCierre,
+        SqliteBienesCierre, SqliteCartera, SqliteCierres, SqliteFondosCierre,
         SqliteLibroCierre, SqliteLotesCierre, SqliteReparto, SqliteSociosCierre,
     };
     use std::sync::Arc;
@@ -747,6 +765,7 @@ mod tests {
             Arc::new(SqliteSociosCierre::new(db.clone())),
             Arc::new(LibroViaCaja::new(caja.clone())),
             Arc::new(SqliteAuditoria::new(db.clone())),
+            Arc::new(crate::core::atomicidad::SqliteAtomicidad::new(db.clone())),
         );
         (svc, db, banco)
     }
@@ -761,6 +780,38 @@ mod tests {
             [],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn no_cierra_ni_guarda_el_mes_si_el_balance_no_cuadra() {
+        let (svc, db, banco) = servicio();
+        let conn = db.open_banco_db(&banco).unwrap();
+        conn.execute(
+            "INSERT INTO movimiento_libro
+                 (id, numero, fecha, codigo, descripcion, ingreso, egreso, saldo)
+             VALUES ('movimiento-inconsistente', 1, '2026-08-15', 'CAF',
+                     'Compra de bien sin registrar el activo', 0, 1000, -1000)",
+            [],
+        )
+        .unwrap();
+
+        let error = svc.ejecutar_cierre(&banco, "2026-08-01", "Tester").unwrap_err();
+        assert!(matches!(
+            error,
+            AppError::OperacionNoPermitida(mensaje)
+                if mensaje.contains("el balance no cuadra")
+                    && mensaje.contains("diferencia: $1.000")
+        ));
+
+        let conn = db.open_banco_db(&banco).unwrap();
+        let cierres: i64 = conn
+            .query_row("SELECT COUNT(*) FROM cierre_mes", [], |row| row.get(0))
+            .unwrap();
+        let repartos: i64 = conn
+            .query_row("SELECT COUNT(*) FROM reparto_ganancias", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(cierres, 0, "no debe quedar un cierre parcialmente guardado");
+        assert_eq!(repartos, 0, "no debe devengarse ganancia si se rechaza el cierre");
     }
 
     /// El Balance del Mes debe cuadrar (Activo = Pasivo) cuando el mes tuvo ingreso

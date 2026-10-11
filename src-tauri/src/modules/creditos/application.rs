@@ -1178,9 +1178,10 @@ mod tests {
     use crate::modules::caja::application::CajaService;
     use crate::modules::caja::data::{SqliteBienes, SqliteFondoGastos, SqliteLibro};
     use crate::modules::configuracion::application::ConfigService;
+    use crate::modules::caja::puente::LibroViaCaja;
     use crate::modules::configuracion::data::SqliteConfiguracion;
     use crate::modules::creditos::data::{
-        AccionesParaCreditoAdapter, LibroViaCaja, ParametrosCreditoAdapter,
+        AccionesParaCreditoAdapter, ParametrosCreditoAdapter,
         SociosParaCreditoAdapter, SqliteCreditos, SqliteSolicitudes,
     };
     use crate::modules::creditos::domain::{DestinoCredito, FiadorSolicitud, NuevaSolicitud};
@@ -1191,7 +1192,6 @@ mod tests {
     struct Contexto {
         servicio: CreditoService,
         caja: Arc<CajaService>,
-        config: ConfigService,
         socios: SocioService,
         banco: String,
         db: DbManager,
@@ -1229,7 +1229,6 @@ mod tests {
         Contexto {
             servicio,
             caja,
-            config,
             socios,
             banco,
             db,
@@ -1273,7 +1272,7 @@ mod tests {
         .unwrap();
     }
 
-    fn solicitud(ctx: &Contexto, titular: &str, fiador_cedula: &str, monto: f64) -> NuevaSolicitud {
+    fn solicitud(_ctx: &Contexto, titular: &str, fiador_cedula: &str, monto: f64) -> NuevaSolicitud {
         NuevaSolicitud {
             socio_id: titular.into(),
             monto_solicitado: monto,

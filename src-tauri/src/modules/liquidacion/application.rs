@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::atomicidad::{atomico, AtomicidadPort};
 use crate::core::error::AppError;
 use crate::modules::acciones::application::AccionesService;
 use crate::modules::acciones::domain::meses_entre;
@@ -108,6 +109,7 @@ pub struct LiquidacionService {
     cierre: Arc<CierreService>,
     caja: Arc<CajaService>,
     config: Arc<ConfigService>,
+    atomicidad: Arc<dyn AtomicidadPort>,
 }
 
 impl LiquidacionService {
@@ -118,8 +120,9 @@ impl LiquidacionService {
         cierre: Arc<CierreService>,
         caja: Arc<CajaService>,
         config: Arc<ConfigService>,
+        atomicidad: Arc<dyn AtomicidadPort>,
     ) -> Self {
-        Self { socios, acciones, creditos, cierre, caja, config }
+        Self { socios, acciones, creditos, cierre, caja, config, atomicidad }
     }
 
     /// Reúne los insumos de la Liquidación Final (caja, créditos por cobrar, acciones y
@@ -217,21 +220,17 @@ impl LiquidacionService {
     /// RF-28 / RF-38: ejecuta el retiro (liquidación total) de un socio dejando el Balance
     /// cuadrado (Activo = Pasivo). Ver el detalle de cada paso en los comentarios.
     ///
-    /// LIMITACIÓN CONOCIDA (atomicidad): esta operación hace varias escrituras en distintos
-    /// módulos (cierre, acciones, créditos, caja, socios), cada una en su propia transacción
-    /// SQLite —no hay una transacción única que las envuelva ni compensación si una falla a
-    /// mitad—. Las validaciones que pueden fallar (p. ej. fiador vigente) se hacen ANTES de
-    /// tocar nada, así que en operación normal la secuencia se completa entera; el único
-    /// escenario de inconsistencia es un corte de energía / caída del proceso entre dos de
-    /// las escrituras. Se asume ese riesgo a propósito (app de escritorio mono-usuario, ADR-03):
-    /// cerrarlo exigiría un unit-of-work que enhebre una sola transacción por los cinco
-    /// módulos, cuyo costo/riesgo no compensa hoy. Si se endurece la persistencia, este es
-    /// el punto a convertir en atómico. Ver memoria [[cuadre-caja-reconciliacion]].
+    /// Es atómica: o se aplican todos los pasos o la base vuelve a su estado previo
+    /// (ver `AtomicidadPort`). Las validaciones se hacen antes de tocar nada.
     pub fn ejecutar_retiro_socio(
         &self,
         banco_id: &str,
         datos: DatosRetiroSocio,
     ) -> Result<(), AppError> {
+        atomico(&*self.atomicidad, banco_id, || self.retirar_socio(banco_id, datos.clone()))
+    }
+
+    fn retirar_socio(&self, banco_id: &str, datos: DatosRetiroSocio) -> Result<(), AppError> {
         let prev = self.preparar_liquidacion_socio(banco_id, &datos.socio_id)?;
 
         if prev.acciones_comprometidas_fiador > 0.0 {
@@ -388,6 +387,14 @@ impl LiquidacionService {
         banco_id: &str,
         datos: DatosLiquidacionParcial,
     ) -> Result<ResultadoLiquidacionParcial, AppError> {
+        atomico(&*self.atomicidad, banco_id, || self.liquidar_parcial(banco_id, datos.clone()))
+    }
+
+    fn liquidar_parcial(
+        &self,
+        banco_id: &str,
+        datos: DatosLiquidacionParcial,
+    ) -> Result<ResultadoLiquidacionParcial, AppError> {
         let prev = self.preparar_liquidacion_socio(banco_id, &datos.socio_id)?;
         let comprometidas = prev.acciones_comprometidas.ceil() as i64;
         let libres = (prev.caps_activas - comprometidas).max(0);
@@ -501,6 +508,14 @@ impl LiquidacionService {
         banco_id: &str,
         datos: DatosPagoDeudaPendiente,
     ) -> Result<f64, AppError> {
+        atomico(&*self.atomicidad, banco_id, || self.abonar_deuda_pendiente(banco_id, datos.clone()))
+    }
+
+    fn abonar_deuda_pendiente(
+        &self,
+        banco_id: &str,
+        datos: DatosPagoDeudaPendiente,
+    ) -> Result<f64, AppError> {
         let socio = self.socios.obtener(banco_id, &datos.socio_id)?;
         if socio.estatus != EstatusSocio::RetiradoConDeuda || socio.saldo_incobrable <= 0.0 {
             return Err(AppError::OperacionNoPermitida(
@@ -591,7 +606,7 @@ mod tests {
         let acciones = Arc::new(AccionesService::new(
             Arc::new(crate::modules::acciones::data::SqliteLotesAcciones::new(db.clone())),
             Arc::new(crate::modules::acciones::data::SqliteParametrosAcciones::new(db.clone())),
-            Arc::new(crate::modules::acciones::data::LibroViaCaja::new(caja.clone())),
+            Arc::new(crate::modules::caja::puente::LibroViaCaja::new(caja.clone())),
             Arc::new(crate::modules::acciones::data::SqliteCierres::new(db.clone())),
         ));
         let creditos = Arc::new(CreditoService::new(
@@ -600,7 +615,7 @@ mod tests {
             Arc::new(crate::modules::creditos::data::ParametrosCreditoAdapter::new(db.clone())),
             Arc::new(crate::modules::creditos::data::AccionesParaCreditoAdapter::new(db.clone())),
             Arc::new(crate::modules::creditos::data::SociosParaCreditoAdapter::new(db.clone())),
-            Arc::new(crate::modules::creditos::data::LibroViaCaja::new(caja.clone())),
+            Arc::new(crate::modules::caja::puente::LibroViaCaja::new(caja.clone())),
         ));
         let cierre = Arc::new(CierreService::new(
             Arc::new(crate::modules::cierre::data::SqliteCierres::new(db.clone())),
@@ -611,8 +626,9 @@ mod tests {
             Arc::new(crate::modules::cierre::data::SqliteFondosCierre::new(db.clone())),
             Arc::new(crate::modules::cierre::data::SqliteLotesCierre::new(db.clone())),
             Arc::new(crate::modules::cierre::data::SqliteSociosCierre::new(db.clone())),
-            Arc::new(crate::modules::cierre::data::LibroViaCaja::new(caja.clone())),
+            Arc::new(crate::modules::caja::puente::LibroViaCaja::new(caja.clone())),
             Arc::new(SqliteAuditoria::new(db.clone())),
+            Arc::new(crate::core::atomicidad::SqliteAtomicidad::new(db.clone())),
         ));
 
         config.obtener_configuracion(&banco).unwrap();
@@ -632,6 +648,7 @@ mod tests {
             cierre.clone(),
             caja.clone(),
             config.clone(),
+            Arc::new(crate::core::atomicidad::SqliteAtomicidad::new(db.clone())),
         );
         Ctx { liq, caja, acciones, creditos, cierre, socios, db, banco }
     }

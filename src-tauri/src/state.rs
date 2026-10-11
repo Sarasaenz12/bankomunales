@@ -9,6 +9,7 @@ use crate::modules::cierre::application::CierreService;
 use crate::modules::configuracion::application::ConfigService;
 use crate::modules::creditos::application::CreditoService;
 use crate::modules::deuda::application::DeudaService;
+use crate::modules::liquidacion::application::LiquidacionService;
 use crate::modules::reportes::application::ReportesService;
 use crate::modules::respaldo::application::RespaldoService;
 use crate::modules::socios::application::SocioService;
@@ -25,6 +26,7 @@ pub struct AppState {
     pub creditos: Arc<CreditoService>,
     pub cierre: Arc<CierreService>,
     pub deuda: Arc<DeudaService>,
+    pub liquidacion: Arc<LiquidacionService>,
     pub reportes: Arc<ReportesService>,
     pub respaldo: Arc<RespaldoService>,
     banco_seleccionado: Mutex<Option<String>>,
@@ -34,6 +36,7 @@ pub struct AppState {
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         auth: Arc<AuthService>,
         config: Arc<ConfigService>,
@@ -43,6 +46,7 @@ impl AppState {
         creditos: Arc<CreditoService>,
         cierre: Arc<CierreService>,
         deuda: Arc<DeudaService>,
+        liquidacion: Arc<LiquidacionService>,
         reportes: Arc<ReportesService>,
         respaldo: Arc<RespaldoService>,
     ) -> Self {
@@ -55,6 +59,7 @@ impl AppState {
             creditos,
             cierre,
             deuda,
+            liquidacion,
             reportes,
             respaldo,
             banco_seleccionado: Mutex::new(None),
@@ -64,12 +69,12 @@ impl AppState {
 
     /// Marca la sesión como autenticada tras un login válido.
     pub fn marcar_autenticado(&self) {
-        *self.autenticado.lock().unwrap() = true;
+        *self.autenticado.lock().unwrap_or_else(|e| e.into_inner()) = true;
     }
 
     /// Indica si esta sesión ya inició sesión correctamente.
     pub fn esta_autenticado(&self) -> bool {
-        *self.autenticado.lock().unwrap()
+        *self.autenticado.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Exige sesión iniciada; error de dominio claro si no lo está.
@@ -91,7 +96,7 @@ impl AppState {
     }
 
     pub fn set_banco_seleccionado(&self, id: Option<String>) {
-        let mut g = self.banco_seleccionado.lock().unwrap();
+        let mut g = self.banco_seleccionado.lock().unwrap_or_else(|e| e.into_inner());
         *g = id;
     }
 

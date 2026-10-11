@@ -1,18 +1,19 @@
-use std::sync::Arc;
 
 use rusqlite::params;
 
 use crate::core::db::DbManager;
 use crate::core::error::AppError;
-use crate::modules::caja::application::CajaService;
-use crate::modules::caja::domain::CodigoOperacion;
 use crate::modules::configuracion::data::SqliteConfiguracion;
 use crate::modules::configuracion::domain::ConfiguracionPort;
 
 use super::domain::{
-    CierresPort, LibroContablePort, LoteAcciones, LoteAccionesPort, LoteLiquidado,
+    CierresPort, LoteAcciones, LoteAccionesPort, LoteLiquidado,
     ParametrosAcciones, ParametrosAccionesPort,
 };
+
+/// Fila de `pago_ganancia` que se reparte al partir un lote: (id, reparto, acciones,
+/// valor_por_accion, monto, estado, fecha_pago, fecha_liberacion).
+type FilaPagoGanancia = (String, String, i64, f64, f64, String, Option<String>, Option<String>);
 
 const SELECT_LOTE: &str = "SELECT id, socio_id, mes_compra, fecha_compra, cantidad,
             valor_nominal_compra, monto_pagado, liquidada, fecha_liquidacion
@@ -273,7 +274,7 @@ impl LoteAccionesPort for SqliteLotesAcciones {
                 // que apunta al trozo nuevo, dejando el resto en el original. El residuo del
                 // redondeo se queda en la fila original, así Σ(monto) por reparto no cambia
                 // y las "ganancias no repartidas" del Pasivo se conservan exactas.
-                let filas: Vec<(String, String, i64, f64, f64, String, Option<String>, Option<String>)> = {
+                let filas: Vec<FilaPagoGanancia> = {
                     let mut stmt = tx.prepare(
                         "SELECT id, reparto_ganancias_id, acciones, valor_por_accion, monto,
                                 estado, fecha_pago, fecha_liberacion
@@ -412,40 +413,3 @@ impl ParametrosAccionesPort for SqliteParametrosAcciones {
     }
 }
 
-/// Puente entre Acciones y el Libro de Ingresos y Egresos.
-///
-/// El Libro —su consecutivo, su saldo acumulado y su recálculo— es responsabilidad del
-/// módulo de Caja. Acciones no reimplementa nada de eso: le pide a `CajaService` que
-/// asiente la venta, de modo que la contabilidad siga teniendo un solo dueño.
-pub struct LibroViaCaja {
-    caja: Arc<CajaService>,
-}
-
-impl LibroViaCaja {
-    pub fn new(caja: Arc<CajaService>) -> Self {
-        Self { caja }
-    }
-}
-
-impl LibroContablePort for LibroViaCaja {
-    fn registrar_venta_acciones(
-        &self,
-        banco_id: &str,
-        fecha: &str,
-        monto: f64,
-        socio_id: &str,
-        descripcion: &str,
-    ) -> Result<(), AppError> {
-        self.caja
-            .registrar_asiento_de_modulo(
-                banco_id,
-                CodigoOperacion::VentaAcciones,
-                fecha.to_string(),
-                monto,
-                descripcion.to_string(),
-                Some(socio_id.to_string()),
-                None,
-            )
-            .map(|_| ())
-    }
-}

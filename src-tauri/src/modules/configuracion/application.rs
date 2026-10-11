@@ -478,7 +478,6 @@ mod tests {
             Arc::new(SqliteAppSettings::new(db.clone())),
             Arc::new(BcryptHasher),
             Arc::new(SqliteBancoCatalogo::new(db.clone())),
-            db.clone(),
         );
         auth.inicializar().unwrap();
         let banco = auth

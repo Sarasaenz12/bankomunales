@@ -445,7 +445,7 @@ mod tests {
         let acciones = AccionesService::new(
             Arc::new(SqliteLotesAcciones::new(db.clone())),
             Arc::new(SqliteParametrosAcciones::new(db.clone())),
-            Arc::new(crate::modules::acciones::data::LibroViaCaja::new(
+            Arc::new(crate::modules::caja::puente::LibroViaCaja::new(
                 caja.clone(),
             )),
             Arc::new(crate::modules::acciones::data::SqliteCierres::new(

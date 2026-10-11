@@ -1,16 +1,13 @@
-use std::sync::Arc;
 
 use rusqlite::params;
 
 use crate::core::db::DbManager;
 use crate::core::error::AppError;
-use crate::modules::caja::application::CajaService;
-use crate::modules::caja::domain::CodigoOperacion;
 use crate::modules::configuracion::data::SqliteConfiguracion;
 use crate::modules::configuracion::domain::ConfiguracionPort;
 
 use super::domain::{
-    CreditoConsultaPort, CreditoDeuda, Cuota, CuotaPort, CuotaReamortizada, LibroDeudaPort,
+    CreditoConsultaPort, CreditoDeuda, Cuota, CuotaPort, CuotaReamortizada,
     ParametrosDeudaPort,
 };
 
@@ -195,76 +192,6 @@ impl CuotaPort for SqliteCuotas {
 
         tx.commit()?;
         Ok(())
-    }
-}
-
-/// Puente entre el Servicio de la Deuda y el Libro: los asientos OR/PC/MO los lleva Caja,
-/// única dueña del consecutivo y del saldo (mismo patrón que Acciones y Créditos).
-pub struct LibroViaCaja {
-    caja: Arc<CajaService>,
-}
-
-impl LibroViaCaja {
-    pub fn new(caja: Arc<CajaService>) -> Self {
-        Self { caja }
-    }
-
-    fn asentar(
-        &self,
-        banco_id: &str,
-        codigo: CodigoOperacion,
-        fecha: &str,
-        monto: f64,
-        socio_id: &str,
-        credito_id: &str,
-        descripcion: &str,
-    ) -> Result<(), AppError> {
-        self.caja
-            .registrar_asiento_de_modulo(
-                banco_id,
-                codigo,
-                fecha.to_string(),
-                monto,
-                descripcion.to_string(),
-                Some(socio_id.to_string()),
-                Some(credito_id.to_string()),
-            )
-            .map(|_| ())
-    }
-}
-
-impl LibroDeudaPort for LibroViaCaja {
-    fn registrar_interes_ordinario(
-        &self,
-        banco_id: &str,
-        fecha: &str,
-        monto: f64,
-        socio_id: &str,
-        credito_id: &str,
-    ) -> Result<(), AppError> {
-        self.asentar(banco_id, CodigoOperacion::InteresOrdinario, fecha, monto, socio_id, credito_id, "Interés ordinario de cuota")
-    }
-
-    fn registrar_pago_capital(
-        &self,
-        banco_id: &str,
-        fecha: &str,
-        monto: f64,
-        socio_id: &str,
-        credito_id: &str,
-    ) -> Result<(), AppError> {
-        self.asentar(banco_id, CodigoOperacion::PagoCuota, fecha, monto, socio_id, credito_id, "Pago de capital de cuota")
-    }
-
-    fn registrar_mora(
-        &self,
-        banco_id: &str,
-        fecha: &str,
-        monto: f64,
-        socio_id: &str,
-        credito_id: &str,
-    ) -> Result<(), AppError> {
-        self.asentar(banco_id, CodigoOperacion::InteresMora, fecha, monto, socio_id, credito_id, "Interés de mora de cuota")
     }
 }
 

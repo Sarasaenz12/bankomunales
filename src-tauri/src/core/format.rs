@@ -17,7 +17,7 @@ pub fn pesos(valor: f64) -> String {
         salida.push('-');
     }
     for (i, c) in digitos.chars().enumerate() {
-        if i > 0 && (len - i) % 3 == 0 {
+        if i > 0 && (len - i).is_multiple_of(3) {
             salida.push('.');
         }
         salida.push(c);

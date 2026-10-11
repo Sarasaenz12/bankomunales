@@ -509,7 +509,7 @@ mod tests {
 
     /// RF-40: los ingresos repartibles son OR + MO + OI.
     #[test]
-    fn los_ingresos_repartibles_suman_OR_MO_OI() {
+    fn los_ingresos_repartibles_suman_or_mo_oi() {
         let filas = vec![
             fila("OR", 40_000.0, 0.0),
             fila("MO", 10_000.0, 0.0),
@@ -525,7 +525,7 @@ mod tests {
     /// D-20: sólo el código EG se resta como Otros Egresos; los GBK no, para no
     /// restar dos veces los gastos que ya salen del Fondo para Gastos.
     #[test]
-    fn solo_EG_cuenta_como_otros_egresos() {
+    fn solo_eg_cuenta_como_otros_egresos() {
         let filas = vec![
             fila("EG", 0.0, 19_000.0),
             fila("GBK", 0.0, 8_000.0),

@@ -232,7 +232,7 @@ pub struct FiltroLibro {
     pub hasta: Option<String>,
 }
 
-/// --- Puertos (hexagonal) ---
+// --- Puertos (hexagonal) ---
 
 pub trait LibroPort: Send + Sync {
     /// Asienta un movimiento nuevo y, en la MISMA transacción, ajusta el Fondo para

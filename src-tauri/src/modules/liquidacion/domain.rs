@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+
 /// Insumos a nivel Banko que decide la Asamblea al liquidar.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParametrosLiquidacion {
