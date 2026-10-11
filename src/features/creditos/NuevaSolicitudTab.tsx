@@ -12,6 +12,7 @@ import {
     DestinoCredito, DESTINOS_CREDITO, NuevaSolicitud, NuevoDesembolso,
     Credito, TablaCredito, FiadorSolicitud,
 } from './types';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
     const [socios, setSocios] = useState<SocioResumen[]>([]);
@@ -41,7 +42,7 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
     useEffect(() => {
         creditosService.listarSociosActivos()
             .then(setSocios)
-            .catch(e => setError(e?.toString() ?? 'Error al cargar socios'));
+            .catch(e => setError(mensajeDeError(e, 'Error al cargar socios')));
         creditosService.obtenerConfiguracion()
             .then(c => { setConfig(c); setTasa(String(c.tasa_interes_ordinario)); })
             .catch(() => {});
@@ -70,7 +71,7 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
         let vigente = true;
         creditosService.previsualizarTabla(importe, cuotas)
             .then(t => { if (vigente) { setTabla(t); setError(''); } })
-            .catch(e => { if (vigente) { setTabla(null); setError(e?.toString() ?? ''); } });
+            .catch(e => { if (vigente) { setTabla(null); setError(mensajeDeError(e, '')); } });
         return () => { vigente = false; };
     }, [monto, plazo]);
 
@@ -153,8 +154,8 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
             setSuccess(`Solicitud ${guardada.estado === 'PENDIENTE' ? 'enviada a la Junta' : 'registrada'}: ${
                 fmt(guardada.monto_solicitado, moneda)} a ${guardada.plazo_cuotas} cuotas.`);
             limpiarFormulario();
-        } catch (err: any) {
-            setError(err?.toString() ?? 'No se pudo registrar la solicitud');
+        } catch (err) {
+            setError(mensajeDeError(err, 'No se pudo registrar la solicitud'));
         } finally {
             enviando.current = false;
             setGuardando(false);
@@ -180,8 +181,8 @@ export function NuevaSolicitudTab({ moneda }: { moneda: string }) {
             const credito: Credito = await creditosService.registrarDesembolso(des);
             setSuccess(`Crédito Nº ${credito.numero} desembolsado por ${fmt(credito.monto_original, moneda)}.`);
             limpiarFormulario();
-        } catch (err: any) {
-            setError(err?.toString() ?? 'No se pudo registrar el desembolso');
+        } catch (err) {
+            setError(mensajeDeError(err, 'No se pudo registrar el desembolso'));
         } finally {
             enviando.current = false;
             setGuardando(false);

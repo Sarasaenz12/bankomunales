@@ -145,3 +145,12 @@ export interface Credito {
 }
 
 export type { SocioResumen };
+/** Datos para refinanciar un crédito vigente (RF-73). Espejo de `NuevoRefinanciamiento` del backend. */
+export interface NuevoRefinanciamiento {
+  credito_id_anterior: string;
+  monto: number;
+  plazo_cuotas: number;
+  intereses_en_efectivo: boolean;
+  fiadores: FiadorSolicitud[];
+  fecha?: string | null;
+}

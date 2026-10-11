@@ -5,6 +5,7 @@ import { fmt } from '../../core/lib/format';
 import { mesActual } from './util';
 import { sociosService } from '../socios/sociosService';
 import { SocioResumen } from '../socios/types';
+import { mensajeDeError } from '../../core/lib/errores';
 
 /** Estado de pago de la ganancia acumulada de un socio para la cohorte. */
 function estadoPago(acumulado: number, pendiente: number): string {
@@ -30,8 +31,8 @@ export function RepartoAnualTab({ moneda }: { moneda: string }) {
         setError(''); setDatos(null);
         try {
             setDatos(await cierreService.repartoAnual(mes + '-01'));
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo calcular el reparto anual');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo calcular el reparto anual'));
         }
     }
 

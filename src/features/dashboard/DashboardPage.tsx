@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Users, TrendingUp, CreditCard, DollarSign } from 'lucide-react';
 import { dashboardService } from './dashboardService';
-import { DatosGenerales } from '../../core/types';
+import { DatosGenerales, EntradaAuditoria } from '../../core/types';
 import { fmt } from '../../core/lib/format';
 import { PageHeader } from '../../core/components/PageHeader';
 import { useBanco } from '../../core/context/BankContext';
+import { mensajeDeError } from '../../core/lib/errores';
 
 // ── Placeholder recent activity (until we have a real movements table) ──
 const RECENT_PLACEHOLDER = [
@@ -16,7 +17,7 @@ export function DashboardPage() {
     const navigate = useNavigate();
     const bank = useBanco();
     const [datos, setDatos] = useState<DatosGenerales | null>(null);
-    const [auditoria, setAuditoria] = useState<any[]>([]);
+    const [auditoria, setAuditoria] = useState<EntradaAuditoria[]>([]);
     const [error, setError] = useState('');
 
     useEffect(() => {
@@ -27,7 +28,7 @@ export function DashboardPage() {
                 console.log('🟢 Datos del dashboard:', d); 
                 setAuditoria(auditoria);
             })
-            .catch(e => setError(e?.toString() || 'Error'));
+            .catch(e => setError(mensajeDeError(e, 'Error')));
     }, [bank]);
 
     useEffect(() => {
@@ -35,7 +36,6 @@ export function DashboardPage() {
         dashboardService.cargarResumenGeneral()
             .then(({ datos: d }) => { 
                 setDatos(d);
-                console.log('🟢 Datos resumen general:', d); 
             })
             .catch(e => console.error('Error cargando resumen general:', e));
     }, [bank]);

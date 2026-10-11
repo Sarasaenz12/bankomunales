@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { cajaService } from './cajaService';
 import { Movimiento } from './types';
 import { fmt, fmtNum, parseNum } from '../../core/lib/format';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export const ETIQUETA_CODIGO: Record<string, string> = {
     OI: 'Otro Ingreso', EG: 'Otro Egreso',
@@ -128,8 +129,8 @@ function CorregirForm({ mov, onCancelar, onListo, onError }: {
                 mov.mes_cerrado ? motivo : null,
             );
             onListo();
-        } catch (err: any) {
-            onError(err?.toString() ?? 'No se pudo corregir la operación');
+        } catch (err) {
+            onError(mensajeDeError(err, 'No se pudo corregir la operación'));
         }
     }
 

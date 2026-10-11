@@ -5,6 +5,7 @@ import { Feedback } from '../../core/components/Feedback';
 import { exportarCSV } from '../../core/utils/csv';
 import { BarraReporte } from './BarraReporte';
 import { enRango } from './rango';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function ReporteSociosActivosTab() {
     const [cargando, setCargando] = useState(true);
@@ -19,8 +20,8 @@ export function ReporteSociosActivosTab() {
                 setCargando(true);
                 setSocios(await api.reporteSociosActivos());
                 setError('');
-            } catch (err: any) {
-                setError(err.toString());
+            } catch (err) {
+                setError(mensajeDeError(err));
             } finally {
                 setCargando(false);
             }

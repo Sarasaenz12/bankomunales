@@ -8,6 +8,7 @@ import { fmt, fmtNum, parseNum } from '../../core/lib/format';
 import { HOY } from '../../core/lib/dates';
 import { api } from '../../core/lib/api';
 import { useEnvioUnico } from '../../core/lib/useEnvioUnico';
+import { mensajeDeError } from '../../core/lib/errores';
 
 type ModoPago = 'cuota' | 'abono';
 
@@ -76,8 +77,8 @@ export function PagoCuotaTab({ moneda }: { moneda: string }) {
         setCargando(true);
         try {
             setEstado(await deudaService.estadoCredito(numero.trim()));
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo buscar el crédito');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo buscar el crédito'));
         } finally {
             setCargando(false);
         }
@@ -184,8 +185,8 @@ export function PagoCuotaTab({ moneda }: { moneda: string }) {
                 setResultadoAbono(r);
                 setEstado(null); setQuery(''); setSeleccionado(false);
                 setModoPago('cuota'); setMontoAbonoTxt(''); setCantidadCuotas(1);
-            } catch (e: any) {
-                setError(e?.toString() ?? 'No se pudo registrar el abono');
+            } catch (e) {
+                setError(mensajeDeError(e, 'No se pudo registrar el abono'));
             }
             return;
         }
@@ -196,8 +197,8 @@ export function PagoCuotaTab({ moneda }: { moneda: string }) {
             setResultadoPago(r);
             setEstado(null); setQuery(''); setSeleccionado(false);
             setCantidadCuotas(1);
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo registrar el pago');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo registrar el pago'));
         }
     }
 

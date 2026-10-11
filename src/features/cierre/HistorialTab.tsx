@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { cierreService } from './cierreService';
 import { CierreMes, DetalleCierre } from './types';
 import { fmt } from '../../core/lib/format';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function HistorialTab({ moneda }: { moneda: string }) {
     const [cierres, setCierres] = useState<CierreMes[]>([]);
@@ -12,7 +13,7 @@ export function HistorialTab({ moneda }: { moneda: string }) {
     useEffect(() => {
         cierreService.listarCierres()
             .then(setCierres)
-            .catch(e => setError(e?.toString() ?? 'Error al cargar los cierres'));
+            .catch(e => setError(mensajeDeError(e, 'Error al cargar los cierres')));
     }, []);
 
     async function verDetalle(id: string) {
@@ -23,8 +24,8 @@ export function HistorialTab({ moneda }: { moneda: string }) {
                 setDetalle({ ...detalle, [id]: await cierreService.detalleCierre(id) });
             }
             setVisible(id);
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo cargar el detalle');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo cargar el detalle'));
         }
     }
 

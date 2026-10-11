@@ -48,3 +48,15 @@ export interface DatosGenerales {
   socios_activos: number;
   creditos_vigentes: number;
 }
+/** Entrada de la bitácora de Auditoría (espejo de `EntradaAuditoria` del backend). */
+export interface EntradaAuditoria {
+    id: string;
+    fecha: string;
+    nombre_quien_realiza: string;
+    entidad_afectada: string;
+    campo_modificado: string | null;
+    valor_anterior: string | null;
+    valor_nuevo: string | null;
+    motivo: string | null;
+    tipo_accion: string;
+}

@@ -128,7 +128,7 @@ export function DetalleCredito({ credito, solicitud, moneda, nombreSocio }: {
                                 <tr><th>Socio</th><th>Rol</th><th style={{ textAlign: 'right' }}>Acciones</th></tr>
                             </thead>
                             <tbody>
-                                {data.garantias.map((g: any, i: number) => (
+                                {data.garantias.map((g, i) => (
                                     <tr key={i}>
                                         <td>{nombreSocio(g.socio_id)}</td>
                                         <td>{g.rol ?? 'TITULAR/FIADOR'}</td>

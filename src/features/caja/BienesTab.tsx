@@ -4,6 +4,7 @@ import { Bien, TipoBien } from './types';
 import { fmt, fmtNum, parseNum } from '../../core/lib/format';
 import { HOY } from '../../core/lib/dates';
 import { useEnvioUnico } from '../../core/lib/useEnvioUnico';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function BienesTab({ bienes, moneda, onHecho, onError }: {
     bienes: Bien[];
@@ -25,8 +26,8 @@ export function BienesTab({ bienes, moneda, onHecho, onError }: {
             setDescripcion('');
             setValor('');
             onHecho('Bien registrado como activo fijo.');
-        } catch (err: any) {
-            onError(err?.toString() ?? 'No se pudo registrar el bien');
+        } catch (err) {
+            onError(mensajeDeError(err, 'No se pudo registrar el bien'));
         }
     }
 

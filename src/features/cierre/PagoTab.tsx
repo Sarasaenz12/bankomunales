@@ -5,6 +5,7 @@ import { fmt } from '../../core/lib/format';
 import { fechaHoy } from './util';
 import { sociosService } from '../socios/sociosService';
 import { SocioResumen } from '../socios/types';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function PagoTab({ moneda }: { moneda: string }) {
     const [fecha, setFecha] = useState(fechaHoy());
@@ -30,8 +31,8 @@ export function PagoTab({ moneda }: { moneda: string }) {
             setSuccess(r.length
                 ? `Se pagaron las ganancias de ${r.length} socio(s).`
                 : 'No hay lotes que hayan cumplido su año todavía.');
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo pagar las ganancias');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo pagar las ganancias'));
         }
     }
 

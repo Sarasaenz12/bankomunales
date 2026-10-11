@@ -8,6 +8,7 @@ import { fmt } from '../../core/lib/format';
 import { PageHeader } from '../../core/components/PageHeader';
 import { Tabs } from '../../core/components/Tabs';
 import { useBanco } from '../../core/context/BankContext';
+import { mensajeDeError } from '../../core/lib/errores';
 
 type Pestana = 'libro' | 'registrar' | 'bienes';
 
@@ -32,8 +33,8 @@ export function CajaPage() {
             setLibro(r.libro);
             setResumen(r.resumen);
             setBienes(r.bienes);
-        } catch (e: any) {
-            setError(e?.toString() ?? 'Error al cargar la caja');
+        } catch (e) {
+            setError(mensajeDeError(e, 'Error al cargar la caja'));
         }
     }
 

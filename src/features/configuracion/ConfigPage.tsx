@@ -5,6 +5,7 @@ import { Configuracion, DatosGenerales } from '../../core/types';
 import { fmt, fmtNum, parseNum } from '../../core/lib/format';
 import { PageHeader } from '../../core/components/PageHeader';
 import { useBanco } from '../../core/context/BankContext';
+import { mensajeDeError } from '../../core/lib/errores';
 
 /** Todos los campos numéricos de la Configuración. Fuente única para convertir el
  *  formulario (que edita en texto) hacia y desde la entidad tipada. */
@@ -63,8 +64,8 @@ export function ConfigPage() {
             const { config, datos } = await configuracionService.cargarTodo();
             setConfig(aFormulario(config));
             setDatos(datos);
-        } catch (err: any) {
-            setError(err?.toString() || 'Error al cargar configuración');
+        } catch (err) {
+            setError(mensajeDeError(err, 'Error al cargar configuración'));
         }
     };
 
@@ -111,8 +112,8 @@ export function ConfigPage() {
             setQuienRealiza('');
             setMotivo('');
             loadData();
-        } catch (err: any) {
-            setError(err?.toString() || 'Error al guardar la configuración');
+        } catch (err) {
+            setError(mensajeDeError(err, 'Error al guardar la configuración'));
         }
     };
 

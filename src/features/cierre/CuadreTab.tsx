@@ -3,6 +3,7 @@ import { cierreService } from './cierreService';
 import { PrevisualizacionCierre } from './types';
 import { fmt } from '../../core/lib/format';
 import { mesActual } from './util';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function CuadreTab({ moneda }: { moneda: string }) {
     const [mes, setMes] = useState(mesActual());
@@ -13,8 +14,8 @@ export function CuadreTab({ moneda }: { moneda: string }) {
         setError(''); setDatos(null);
         try {
             setDatos(await cierreService.previsualizarCierre(mes + '-01'));
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo calcular el cuadre');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo calcular el cuadre'));
         }
     }
 
@@ -39,7 +40,7 @@ export function CuadreTab({ moneda }: { moneda: string }) {
             {c && (
                 <>
                     <div className="text-sm text-muted mt-4" style={{ marginBottom: '0.5rem' }}>
-                        Cuadre del mes <strong>{c.mes}</strong> — D-20
+                        Cuadre del mes <strong>{c.mes}</strong>
                     </div>
                     <div className="grid-cuadre">
                         <div className="detalle-card">
@@ -88,8 +89,8 @@ export function CuadreTab({ moneda }: { moneda: string }) {
                         Reparto de Ganancias
                     </div>
                     <div className="grid-dos">
-                        <div>Ingresos repartibles (OR+MO+OI): <strong>{fmt(r.ingresos_repartibles, moneda)}</strong></div>
-                        <div>Otros egresos (EG): <strong>{fmt(r.otros_egresos, moneda)}</strong></div>
+                        <div>Ingresos repartibles (intereses, mora y otros ingresos): <strong>{fmt(r.ingresos_repartibles, moneda)}</strong></div>
+                        <div>Otros egresos: <strong>{fmt(r.otros_egresos, moneda)}</strong></div>
                         <div>Fondo para Gastos (10%): <strong>{fmt(r.fondo_gastos, moneda)}</strong></div>
                         <div>Fondo de Incobrables (10%, con tope): <strong>{fmt(r.fondo_incobrables, moneda)}</strong></div>
                         <div>Balance neto: <strong>{fmt(r.balance_neto, moneda)}</strong></div>

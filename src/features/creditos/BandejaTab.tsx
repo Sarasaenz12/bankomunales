@@ -6,6 +6,7 @@ import { fmt } from '../../core/lib/format';
 import { SocioResumen } from '../socios/types';
 import { sociosService } from '../socios/sociosService';
 import { useEnvioUnico } from '../../core/lib/useEnvioUnico';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function BandejaTab({ moneda }: { moneda: string }) {
     const [solicitudes, setSolicitudes] = useState<SolicitudCredito[]>([]);
@@ -22,7 +23,7 @@ export function BandejaTab({ moneda }: { moneda: string }) {
     function recargar() {
         creditosService.listarSolicitudes(null)
             .then(setSolicitudes)
-            .catch(e => setError(e?.toString() ?? 'Error al cargar solicitudes'));
+            .catch(e => setError(mensajeDeError(e, 'Error al cargar solicitudes')));
         sociosService.listar().then(setSocios).catch(() => { });
     }
     useEffect(() => { recargar(); }, []);
@@ -40,8 +41,8 @@ export function BandejaTab({ moneda }: { moneda: string }) {
         try {
             const credito = await creditosService.buscarCreditoPorSolicitud(sol.id);
             setCreditoVisto({ solId: sol.id, credito });
-        } catch (err: any) {
-            setError(err?.toString() ?? 'No se pudo consultar el crédito');
+        } catch (err) {
+            setError(mensajeDeError(err, 'No se pudo consultar el crédito'));
         }
     }
 
@@ -60,8 +61,8 @@ export function BandejaTab({ moneda }: { moneda: string }) {
             const actualizada = await creditosService.decidir(d);
             setSuccess(`Solicitud ${actualizada.estado}: ${actualizada.monto_aprobado ? fmt(actualizada.monto_aprobado, moneda) : ''} ${actualizada.observacion ? `— ${actualizada.observacion}` : ''}`.trim());
             recargar();
-        } catch (err: any) {
-            setError(err?.toString() ?? 'No se pudo registrar la decisión');
+        } catch (err) {
+            setError(mensajeDeError(err, 'No se pudo registrar la decisión'));
         }
     }
 

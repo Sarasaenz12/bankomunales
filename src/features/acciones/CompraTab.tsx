@@ -6,6 +6,7 @@ import { CalculoCompra, CupoMensual, AutorizacionVenta } from './types';
 import { SocioResumen } from '../socios/types';
 import { fmt, fmtNum, parseNum } from '../../core/lib/format';
 import { BuscadorSocio } from '../../core/components/BuscadorSocio';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function CompraTab({ moneda }: { moneda: string }) {
     const navigate = useNavigate();
@@ -31,8 +32,8 @@ export function CompraTab({ moneda }: { moneda: string }) {
             setSocios(await accionesService.listarSociosActivos());
             setTodos(await sociosService.listar());
             setCupo(await accionesService.cupoDelMes(fecha));
-        } catch (e: any) {
-            setError(e?.toString() ?? 'Error al cargar la información');
+        } catch (e) {
+            setError(mensajeDeError(e, 'Error al cargar la información'));
         }
     }
 
@@ -45,7 +46,7 @@ export function CompraTab({ moneda }: { moneda: string }) {
         const debouncer = setTimeout(() => {
             accionesService.previsualizarCompra(socio.id, importe)
                 .then(c => { if (vigente) { setCalculo(c); setError(''); } })
-                .catch(e => { if (vigente) { setCalculo(null); setError(e?.toString() ?? ''); } });
+                .catch(e => { if (vigente) { setCalculo(null); setError(mensajeDeError(e, '')); } });
         }, 400);
         return () => {
             vigente = false;
@@ -67,8 +68,8 @@ export function CompraTab({ moneda }: { moneda: string }) {
             setMonto(''); setCalculo(null);
             setSocio(null); setBusqueda('');
             await recargar();
-        } catch (err: any) {
-            setError(err?.toString() ?? 'No se pudo registrar la compra');
+        } catch (err) {
+            setError(mensajeDeError(err, 'No se pudo registrar la compra'));
         } finally {
             enviando.current = false;
             setGuardando(false);

@@ -8,6 +8,7 @@ import { fmt, fmtNum, parseNum } from '../../core/lib/format';
 import { HOY } from '../../core/lib/dates';
 import { api } from '../../core/lib/api';
 import { useEnvioUnico } from '../../core/lib/useEnvioUnico';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function RefinanciamientoTab({ moneda }: { moneda: string }) {
     const { enviando, ejecutar } = useEnvioUnico();
@@ -69,8 +70,8 @@ export function RefinanciamientoTab({ moneda }: { moneda: string }) {
                 return;
             }
             setEstado(e);
-        } catch (err: any) {
-            setError(err?.toString() ?? 'No se pudo buscar el crédito');
+        } catch (err) {
+            setError(mensajeDeError(err, 'No se pudo buscar el crédito'));
         } finally {
             setCargando(false);
         }
@@ -132,8 +133,8 @@ export function RefinanciamientoTab({ moneda }: { moneda: string }) {
             setEstado(null);
             setQuery('');
             setSeleccionado(false);
-        } catch (err: any) {
-            setError(err?.toString() ?? 'Error al refinanciar crédito');
+        } catch (err) {
+            setError(mensajeDeError(err, 'Error al refinanciar crédito'));
         }
     }
 

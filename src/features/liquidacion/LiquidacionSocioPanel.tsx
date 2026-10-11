@@ -5,6 +5,7 @@ import { fmt } from '../../core/lib/format';
 import { sociosService } from '../socios/sociosService';
 import { SocioResumen } from '../socios/types';
 import { BuscadorSocio } from '../../core/components/BuscadorSocio';
+import { mensajeDeError } from '../../core/lib/errores';
 
 type Modo = 'total' | 'parcial';
 
@@ -46,8 +47,8 @@ export function LiquidacionSocioPanel({ moneda }: { moneda: string }) {
             const comprometidas = Math.ceil(d.acciones_comprometidas ?? 0);
             const libres = Math.max(0, (d.caps_activas ?? 0) - comprometidas);
             setCapsLiquidar(Math.max(1, libres));
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo cargar la liquidación del socio');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo cargar la liquidación del socio'));
         }
     }
 
@@ -63,7 +64,7 @@ export function LiquidacionSocioPanel({ moneda }: { moneda: string }) {
         const t = setTimeout(() => {
             liquidacionService.previsualizarLiquidacionParcial(socioId, capsLiquidar, fecha)
                 .then(p => { if (vigente) { setPreview(p); setError(''); } })
-                .catch(e => { if (vigente) { setPreview(null); setError(e?.toString() ?? ''); } });
+                .catch(e => { if (vigente) { setPreview(null); setError(mensajeDeError(e, '')); } });
         }, 300);
         return () => { vigente = false; clearTimeout(t); };
     }, [datos, modo, socioId, capsLiquidar, fecha]);
@@ -95,8 +96,8 @@ export function LiquidacionSocioPanel({ moneda }: { moneda: string }) {
             setPreview(null);
             setModo('total');
             setDestino('efectivo');
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo ejecutar la liquidación');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo ejecutar la liquidación'));
         } finally {
             enviando.current = false;
             setEjecutando(false);

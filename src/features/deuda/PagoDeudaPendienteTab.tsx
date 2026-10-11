@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../../core/lib/api';
 import { SocioDeudor } from './types';
 import { fmt, fmtNum, parseNum } from '../../core/lib/format';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function PagoDeudaPendienteTab({ moneda }: { moneda: string }) {
     const [sociosDeudores, setSociosDeudores] = useState<SocioDeudor[]>([]);
@@ -21,8 +22,8 @@ export function PagoDeudaPendienteTab({ moneda }: { moneda: string }) {
             if (socioId && !retirados.find(r => r.id === socioId)) {
                 setSocioId('');
             }
-        } catch (e: any) {
-            setError(e?.toString() || 'Error cargando endeudados');
+        } catch (e) {
+            setError(mensajeDeError(e, 'Error cargando endeudados'));
         }
     }
 
@@ -58,8 +59,8 @@ export function PagoDeudaPendienteTab({ moneda }: { moneda: string }) {
             setMontoStr('');
             // Recargar la lista (el socio puede desaparecer si el saldo llegó a 0)
             await cargar();
-        } catch (e: any) {
-            setError(e?.toString() || 'Error al procesar pago');
+        } catch (e) {
+            setError(mensajeDeError(e, 'Error al procesar pago'));
         } finally {
             enviando.current = false;
             setPagando(false);

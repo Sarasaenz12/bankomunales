@@ -4,6 +4,7 @@ import { CodigoOperacion, OPERACIONES_CAJA } from './types';
 import { HOY } from '../../core/lib/dates';
 import { fmtNum, parseNum } from '../../core/lib/format';
 import { useEnvioUnico } from '../../core/lib/useEnvioUnico';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function RegistrarTab({ onHecho, onError }: {
     onHecho: (m: string) => void;
@@ -29,8 +30,8 @@ export function RegistrarTab({ onHecho, onError }: {
             setMonto('');
             setDescripcion('');
             onHecho('Operación registrada en el Libro.');
-        } catch (err: any) {
-            onError(err?.toString() ?? 'No se pudo registrar la operación');
+        } catch (err) {
+            onError(mensajeDeError(err, 'No se pudo registrar la operación'));
         }
     }
 

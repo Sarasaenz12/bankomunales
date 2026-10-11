@@ -5,6 +5,7 @@ import { Feedback } from '../../core/components/Feedback';
 import { exportarCSV } from '../../core/utils/csv';
 import { BarraReporte } from './BarraReporte';
 import { enRango } from './rango';
+import { mensajeDeError } from '../../core/lib/errores';
 
 const money = (v: number) =>
     new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v);
@@ -22,8 +23,8 @@ export function ReporteGestionTab() {
                 setCargando(true);
                 setFilas(await api.reporteGestion());
                 setError('');
-            } catch (err: any) {
-                setError(err.toString());
+            } catch (err) {
+                setError(mensajeDeError(err));
             } finally {
                 setCargando(false);
             }

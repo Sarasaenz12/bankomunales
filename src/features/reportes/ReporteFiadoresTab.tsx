@@ -4,6 +4,7 @@ import { ReporteFiadorFila } from './types';
 import { Feedback } from '../../core/components/Feedback';
 import { exportarCSV } from '../../core/utils/csv';
 import { BarraReporte } from './BarraReporte';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function ReporteFiadoresTab() {
     const [cargando, setCargando] = useState(true);
@@ -16,8 +17,8 @@ export function ReporteFiadoresTab() {
                 setCargando(true);
                 setFilas(await api.reporteFiadores());
                 setError('');
-            } catch (err: any) {
-                setError(err.toString());
+            } catch (err) {
+                setError(mensajeDeError(err));
             } finally {
                 setCargando(false);
             }

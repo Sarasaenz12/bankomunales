@@ -4,6 +4,7 @@ import { DesgloseRepartoMes, FilaPagoGanancia, FilaRepartoAnual } from './types'
 import { fmt, fmtNum } from '../../core/lib/format';
 import { mesActual, fechaHoy } from './util';
 import { useEnvioUnico } from '../../core/lib/useEnvioUnico';
+import { mensajeDeError } from '../../core/lib/errores';
 
 const MESES_ES = [
     'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
@@ -84,8 +85,8 @@ export function RepartoGananciasTab({ moneda }: { moneda: string }) {
         setDesgloseErr(''); setDesglose(null);
         try {
             setDesglose(await cierreService.desgloseRepartoMes(m + '-01'));
-        } catch (e: any) {
-            setDesgloseErr(e?.toString() ?? 'No se pudo calcular el desglose del mes');
+        } catch (e) {
+            setDesgloseErr(mensajeDeError(e, 'No se pudo calcular el desglose del mes'));
         }
     }
 
@@ -93,8 +94,8 @@ export function RepartoGananciasTab({ moneda }: { moneda: string }) {
         setError('');
         try {
             setFilas(await cierreService.resumenPagosGanancias(fecha));
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo cargar el resumen de pagos');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo cargar el resumen de pagos'));
         }
     }
 
@@ -123,8 +124,8 @@ export function RepartoGananciasTab({ moneda }: { moneda: string }) {
             setMsg(r.length ? `Liquidada la ganancia del socio (${fmt(total, moneda)}).` : 'No había ganancias cumplidas por pagar.');
             setModal(null);
             await cargarResumen(fechaPago);
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo liquidar');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo liquidar'));
         }
     }
 
@@ -134,8 +135,8 @@ export function RepartoGananciasTab({ moneda }: { moneda: string }) {
             const r = await cierreService.pagarGananciasCumplidas(fechaPago);
             setMsg(r.length ? `Se registraron los pagos de ${r.length} socio(s).` : 'No hay ganancias cumplidas por pagar.');
             await cargarResumen(fechaPago);
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudieron registrar los pagos');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudieron registrar los pagos'));
         }
     }
 

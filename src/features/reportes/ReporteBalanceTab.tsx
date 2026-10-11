@@ -4,6 +4,7 @@ import { ReporteBalanceActual } from './types';
 import { Feedback } from '../../core/components/Feedback';
 import { exportarCSV } from '../../core/utils/csv';
 import { BarraReporte } from './BarraReporte';
+import { mensajeDeError } from '../../core/lib/errores';
 
 const money = (v: number) =>
     new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(v);
@@ -54,8 +55,8 @@ export function ReporteBalanceTab() {
                 setCargando(true);
                 setBalance(await api.reporteBalance());
                 setError('');
-            } catch (err: any) {
-                setError(err.toString());
+            } catch (err) {
+                setError(mensajeDeError(err));
             } finally {
                 setCargando(false);
             }

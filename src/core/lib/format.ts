@@ -1,8 +1,10 @@
 /** Formatea un número como moneda (es-CO, sin decimales). */
 export function fmt(n: number, moneda = 'COP') {
+    // Un valor que redondea a cero se muestra sin signo ("-$ 0" confunde).
+    const valor = Math.round(n) === 0 ? 0 : n;
     return new Intl.NumberFormat('es-CO', {
         style: 'currency', currency: moneda, maximumFractionDigits: 0,
-    }).format(n);
+    }).format(valor);
 }
 
 /**

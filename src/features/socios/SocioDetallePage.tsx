@@ -11,6 +11,7 @@ import { nombreMes } from '../../core/lib/dates';
 import { fmt } from '../../core/lib/format';
 import { useBanco } from '../../core/context/BankContext';
 import { PageHeader } from '../../core/components/PageHeader';
+import { mensajeDeError } from '../../core/lib/errores';
 
 type Pestana = 'datos' | 'acciones' | 'creditos' | 'avala';
 
@@ -63,7 +64,7 @@ export function SocioDetallePage() {
                     beneficiario: s.beneficiario, protegidos: s.protegidos,
                 });
             })
-            .catch(e => setError(e?.toString() ?? 'No se pudo cargar el socio'))
+            .catch(e => setError(mensajeDeError(e, 'No se pudo cargar el socio')))
             .finally(() => setCargando(false));
 
         sociosService.accionesDeSocio(id!).then(setAcciones).catch(() => { });
@@ -103,8 +104,8 @@ export function SocioDetallePage() {
                 setSocio(await sociosService.actualizar(id!, form));
                 setSuccess('Datos del socio actualizados.');
             }
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo guardar el socio');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo guardar el socio'));
         } finally {
             setGuardando(false);
         }

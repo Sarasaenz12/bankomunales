@@ -4,6 +4,7 @@ import { ResultadoCierre } from './types';
 import { fmt } from '../../core/lib/format';
 import { mesActual } from './util';
 import { useEnvioUnico } from '../../core/lib/useEnvioUnico';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function EjecutarTab({ moneda }: { moneda: string }) {
     const [mes, setMes] = useState(mesActual());
@@ -19,8 +20,8 @@ export function EjecutarTab({ moneda }: { moneda: string }) {
             const r = await cierreService.ejecutarCierre(mes + '-01', nombre);
             setResultado(r);
             setSuccess(`Mes ${r.cierre.mes} cerrado.`);
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo ejecutar el cierre');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo ejecutar el cierre'));
         }
     }
 

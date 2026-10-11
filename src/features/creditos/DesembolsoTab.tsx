@@ -7,6 +7,7 @@ import { fmt } from '../../core/lib/format';
 import { SocioResumen } from '../socios/types';
 import { sociosService } from '../socios/sociosService';
 import { NuevoDesembolso, SolicitudCredito, TablaCredito } from './types';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function DesembolsoTab({ moneda }: { moneda: string }) {
     const [solicitudes, setSolicitudes] = useState<SolicitudCredito[]>([]);
@@ -67,8 +68,8 @@ export function DesembolsoTab({ moneda }: { moneda: string }) {
             setSolicitudId('');
             setTabla(null);
             recargar();
-        } catch (err: any) {
-            setError(err?.toString() ?? 'No se pudo desembolsar');
+        } catch (err) {
+            setError(mensajeDeError(err, 'No se pudo desembolsar'));
         } finally {
             enviando.current = false;
             setGuardando(false);

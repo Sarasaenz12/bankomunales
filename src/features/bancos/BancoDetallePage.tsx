@@ -5,6 +5,7 @@ import { Bankomunal } from '../../core/types';
 import { Campo } from '../../core/components/Campo';
 import { PageHeader } from '../../core/components/PageHeader';
 import { MONEDAS } from '../../core/lib/monedas';
+import { mensajeDeError } from '../../core/lib/errores';
 
 type BancoForm = {
     nombre: string;
@@ -40,7 +41,7 @@ export function BancoDetallePage() {
                 setBanco(b);
                 if (!b) setError('No se encontró el Bankomunal.');
             })
-            .catch(e => setError(e?.toString() ?? 'No se pudo cargar el Bankomunal'))
+            .catch(e => setError(mensajeDeError(e, 'No se pudo cargar el Bankomunal')))
             .finally(() => setCargando(false));
     }, [id, esNuevo]);
 
@@ -64,8 +65,8 @@ export function BancoDetallePage() {
             });
             setSuccess(`Bankomunal "${creado.nombre}" creado correctamente.`);
             setTimeout(() => navigate(`/app/bancos/${creado.id}`, { replace: true }), 1200);
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo crear el Bankomunal.');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo crear el Bankomunal.'));
         } finally {
             setGuardando(false);
         }
@@ -76,8 +77,8 @@ export function BancoDetallePage() {
         try {
             await api.seleccionarBankomunal(banco.id);
             navigate('/app/dashboard');
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo seleccionar el Bankomunal.');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo seleccionar el Bankomunal.'));
         }
     }
 

@@ -1,6 +1,6 @@
 import { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import {
-    Bankomunal, NuevoBankomunal, Configuracion, DatosGenerales,
+    Bankomunal, NuevoBankomunal, Configuracion, DatosGenerales, EntradaAuditoria,
 } from '../types';
 import { Socio, SocioResumen, DatosSocio, CupoSocios } from '../../features/socios/types';
 import {
@@ -12,7 +12,7 @@ import {
 } from '../../features/acciones/types';
 import {
     NuevaSolicitud, SolicitudCredito, DecisionSolicitud, NuevoDesembolso,
-    Credito, TablaCredito, EstadoSolicitud,
+    Credito, TablaCredito, EstadoSolicitud, NuevoRefinanciamiento,
 } from '../../features/creditos/types';
 import {
     CierreMes, DesgloseRepartoMes, DetalleCierre, FilaPagoGanancia, PagoGananciaRegistrado,
@@ -110,7 +110,7 @@ export const api = {
     obtenerDatosGenerales: (): Promise<DatosGenerales> =>
         call('obtener_datos_generales'),
 
-    listarAuditoria: (): Promise<any[]> =>
+    listarAuditoria: (): Promise<EntradaAuditoria[]> =>
         call('listar_auditoria'),
 
     // Socios (RF-15 a RF-21)
@@ -220,7 +220,7 @@ export const api = {
     creditosQueAvalaSocio: (socioId: string): Promise<Credito[]> =>
         call('creditos_que_avala_socio', { socioId }),
 
-    registrarRefinanciamiento: (refinanciamiento: any): Promise<Credito> =>
+    registrarRefinanciamiento: (refinanciamiento: NuevoRefinanciamiento): Promise<Credito> =>
         call('registrar_refinanciamiento', { refinanciamiento }),
 
     // Cierre de Mes (RF-91 a RF-97) y Reparto de Ganancias (RF-39 a RF-42)

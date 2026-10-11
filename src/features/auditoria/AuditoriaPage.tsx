@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
+import { EntradaAuditoria } from '../../core/types';
 import { useBanco } from '../../core/context/BankContext';
 import { api } from '../../core/lib/api';
 import { PageHeader } from '../../core/components/PageHeader';
+import { mensajeDeError } from '../../core/lib/errores';
 
 // El backend guarda las fechas de auditoría en UTC sin marcador (`Utc::now()`), p. ej.
 // "2026-09-01T19:30:00". Se interpretan como UTC (añadiendo la Z si falta) y se muestran
@@ -46,7 +48,7 @@ function BadgeTipo({ tipo }: { tipo: string }) {
 }
 
 export function AuditoriaPage() {
-    const [auditorias, setAuditorias] = useState<any[]>([]);
+    const [auditorias, setAuditorias] = useState<EntradaAuditoria[]>([]);
     const [error, setError] = useState('');
     const [cargando, setCargando] = useState(true);
     const bancoId = useBanco()?.id;
@@ -55,7 +57,7 @@ export function AuditoriaPage() {
         if (!bancoId) return;
         api.listarAuditoria()
             .then(setAuditorias)
-            .catch((e: any) => setError(e?.toString() ?? 'Error al cargar la bitácora'))
+            .catch((e: unknown) => setError(mensajeDeError(e, 'Error al cargar la bitácora')))
             .finally(() => setCargando(false));
     }, [bancoId]);
 

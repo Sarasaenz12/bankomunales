@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { save, open, confirm } from '@tauri-apps/plugin-dialog';
 import { api } from '../../core/lib/api';
+import { mensajeDeError } from '../../core/lib/errores';
 import { RegistroRespaldo } from './types';
 import { Feedback } from '../../core/components/Feedback';
 import { PageHeader } from '../../core/components/PageHeader';
@@ -45,8 +46,8 @@ export function RespaldoPage() {
             await api.crearRespaldo(ruta, usuario);
             setExito('Respaldo creado de forma exitosa en la ubicación seleccionada.');
             await cargarHistorial();
-        } catch (err: any) {
-            setError('Error al crear el respaldo: ' + err.toString());
+        } catch (err) {
+            setError('Error al crear el respaldo: ' + mensajeDeError(err));
         } finally {
             setCargando(false);
         }
@@ -65,8 +66,8 @@ export function RespaldoPage() {
             });
             if (!seleccion) return;
             setArchivoRestaurar(seleccion as string);
-        } catch (err: any) {
-            setError('Error al seleccionar el archivo: ' + err.toString());
+        } catch (err) {
+            setError('Error al seleccionar el archivo: ' + mensajeDeError(err));
         }
     };
 
@@ -92,8 +93,8 @@ export function RespaldoPage() {
             setTimeout(() => {
                 window.location.reload();
             }, 3000);
-        } catch (err: any) {
-            setError('Error al restaurar: ' + err.toString());
+        } catch (err) {
+            setError('Error al restaurar: ' + mensajeDeError(err));
         } finally {
             setCargando(false);
         }

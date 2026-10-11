@@ -7,7 +7,7 @@ import { invoke } from '@tauri-apps/api/core';
  * así que se abre el diálogo "Guardar como" y el .xlsx lo genera el backend con encabezado en
  * negrita y columnas autoajustadas.
  */
-export async function exportarCSV(nombreArchivo: string, cabeceras: string[], filas: any[][]) {
+export async function exportarCSV(nombreArchivo: string, cabeceras: string[], filas: unknown[][]) {
     const ruta = await save({
         defaultPath: `${nombreArchivo}.xlsx`,
         filters: [{ name: 'Excel', extensions: ['xlsx'] }],

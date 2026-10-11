@@ -7,6 +7,7 @@ import { BadgeEstatus } from '../../core/components/BadgeEstatus';
 import { Chip } from '../../core/components/Chip';
 import { PageHeader } from '../../core/components/PageHeader';
 import { useBanco } from '../../core/context/BankContext';
+import { mensajeDeError } from '../../core/lib/errores';
 
 type Filtro = 'todos' | 'activos' | 'retirados';
 
@@ -36,7 +37,7 @@ export function SociosPage() {
         if (!bank) return;
         sociosService.cargarResumen()
             .then(({ socios, cupo, acciones }) => { setSocios(socios); setCupo(cupo); setAcciones(acciones); })
-            .catch(e => setError(e?.toString() ?? 'Error al cargar los socios'));
+            .catch(e => setError(mensajeDeError(e, 'Error al cargar los socios')));
     }, [bank]);
 
     const accionesDe = (id: string) => acciones.find(a => a.socio_id === id)?.acciones ?? 0;
