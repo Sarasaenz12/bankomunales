@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { save, open, confirm } from '@tauri-apps/plugin-dialog';
 import { api } from '../../core/lib/api';
 import { mensajeDeError } from '../../core/lib/errores';
-import { RegistroRespaldo, EXTENSION_RESPALDO, nombreSugeridoRespaldo } from './types';
+import { RegistroRespaldo, nombreSugeridoRespaldo } from './types';
 import { Feedback } from '../../core/components/Feedback';
 import { PageHeader } from '../../core/components/PageHeader';
 
@@ -36,7 +36,7 @@ export function RespaldoPage() {
 
             const ruta = await save({
                 title: 'Guardar Respaldo del Bankomunal',
-                filters: [{ name: 'Respaldo de Bankomunal', extensions: [EXTENSION_RESPALDO, 'db', 'bk'] }],
+                filters: [{ name: 'Base de Datos de Bankomunales', extensions: ['db', 'bk'] }],
                 defaultPath: nombreSugeridoRespaldo((await api.bancoSeleccionado())?.nombre ?? ''),
             });
 
@@ -60,7 +60,7 @@ export function RespaldoPage() {
             setExito('');
             const seleccion = await open({
                 title: 'Seleccionar archivo de respaldo',
-                filters: [{ name: 'Respaldo de Bankomunal', extensions: [EXTENSION_RESPALDO, 'db', 'bk'] }],
+                filters: [{ name: 'Base de Datos de Bankomunales', extensions: ['db', 'bk'] }],
                 multiple: false,
                 directory: false,
             });

@@ -33,8 +33,6 @@ pub struct AppState {
     /// Sesión iniciada en el backend (RF-01/RF-02). El login deja de ser sólo visual:
     /// las operaciones de entrada al Banco (crear/seleccionar) lo exigen.
     autenticado: Mutex<bool>,
-    /// Respaldo con el que se abrió la app desde el Explorador (doble clic en el archivo).
-    archivo_pendiente: Mutex<Option<String>>,
 }
 
 impl AppState {
@@ -66,21 +64,7 @@ impl AppState {
             respaldo,
             banco_seleccionado: Mutex::new(None),
             autenticado: Mutex::new(false),
-            archivo_pendiente: Mutex::new(None),
         }
-    }
-
-    pub fn fijar_archivo_pendiente(&self, ruta: String) {
-        *self.archivo_pendiente.lock().unwrap_or_else(|e| e.into_inner()) = Some(ruta);
-    }
-
-    /// Respaldo con el que se abrió la app, si lo hay (sigue pendiente hasta `olvidar_archivo_pendiente`).
-    pub fn ver_archivo_pendiente(&self) -> Option<String> {
-        self.archivo_pendiente.lock().unwrap_or_else(|e| e.into_inner()).clone()
-    }
-
-    pub fn olvidar_archivo_pendiente(&self) {
-        self.archivo_pendiente.lock().unwrap_or_else(|e| e.into_inner()).take();
     }
 
     /// Marca la sesión como autenticada tras un login válido.

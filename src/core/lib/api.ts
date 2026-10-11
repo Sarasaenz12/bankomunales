@@ -23,7 +23,7 @@ import {
     ParametrosLiquidacion, PreviewLiquidacionParcial, ResultadoLiquidacionParcial, SocioLiquidacion,
 } from '../../features/liquidacion/types';
 import { EstadoCreditoDeuda, ResultadoAbono, ResultadoPago, SocioDeudor } from '../../features/deuda/types';
-import { RegistroRespaldo, VistaRespaldo } from '../../features/respaldo/types';
+import { RegistroRespaldo } from '../../features/respaldo/types';
 import {
     ReporteSocioActivo, ReporteGestionFila, ReporteFiadorFila, ReporteCreditoFila,
     ReporteLibroFila, ReporteAccionFila, ReporteBalanceActual,
@@ -320,19 +320,6 @@ export const api = {
 
     restaurarRespaldo: (origenRuta: string, usuario: string): Promise<void> =>
         call('restaurar_respaldo_cmd', { origenRuta, usuario }),
-
-    inspeccionarRespaldo: (ruta: string): Promise<VistaRespaldo> =>
-        call('inspeccionar_respaldo_cmd', { ruta }),
-
-    importarRespaldo: (ruta: string, usuario: string): Promise<VistaRespaldo> =>
-        call('importar_respaldo_cmd', { ruta, usuario }),
-
-    /** Respaldo con el que se abrió la app desde el Explorador, mientras siga pendiente. */
-    archivoPendiente: (): Promise<string | null> =>
-        call('archivo_pendiente_cmd'),
-
-    olvidarArchivoPendiente: (): Promise<void> =>
-        call('olvidar_archivo_pendiente_cmd'),
 
     // Reportes (RF-98..RF-111)
     reporteSociosActivos: (): Promise<ReporteSocioActivo[]> =>

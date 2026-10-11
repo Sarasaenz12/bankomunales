@@ -13,13 +13,11 @@ import { CierrePage } from '../features/cierre/CierrePage';
 import { ReportesPage } from '../features/reportes/ReportesPage';
 import { RespaldoPage } from '../features/respaldo/RespaldoPage';
 import { AuditoriaPage } from '../features/auditoria/AuditoriaPage';
-import { AperturaDeRespaldo } from '../features/respaldo/AperturaDeRespaldo';
 import '../App.css';
 
 function App() {
   return (
     <BrowserRouter>
-      <AperturaDeRespaldo />
       <Routes>
         <Route path="/" element={<AuthPage />} />
         <Route path="/app" element={<AppLayout />}>
