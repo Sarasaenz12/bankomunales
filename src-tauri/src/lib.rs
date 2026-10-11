@@ -4,7 +4,7 @@ mod state;
 
 use std::sync::Arc;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::modules::reportes::presentation::{
     guardar_excel, reporte_acciones, reporte_balance, reporte_creditos,
@@ -12,8 +12,11 @@ use crate::modules::reportes::presentation::{
 };
 use crate::modules::respaldo::application::RespaldoService;
 use crate::modules::respaldo::data::SQLiteRespaldoRepository;
+use crate::modules::respaldo::domain::ruta_de_respaldo;
 use crate::modules::respaldo::presentation::{
-    crear_respaldo_cmd, listar_respaldos_cmd, restaurar_respaldo_cmd,
+    archivo_pendiente_cmd, crear_respaldo_cmd, importar_respaldo_cmd,
+    inspeccionar_respaldo_cmd, listar_respaldos_cmd, olvidar_archivo_pendiente_cmd,
+    restaurar_respaldo_cmd,
 };
 use crate::modules::socios::application::SocioService;
 use crate::modules::socios::data::SqliteSocios;
@@ -55,6 +58,19 @@ use state::AppState;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Una sola ventana: si se hace doble clic en un respaldo con la app ya abierta, el
+        // archivo se entrega a la ventana existente en lugar de abrir una segunda copia
+        // (dos copias sobre los mismos archivos de datos no son seguras).
+        .plugin(tauri_plugin_single_instance::init(|app, argumentos, _cwd| {
+            if let Some(ruta) = ruta_de_respaldo(&argumentos) {
+                app.state::<AppState>().fijar_archivo_pendiente(ruta.clone());
+                let _ = app.emit("archivo-pendiente", ruta);
+            }
+            if let Some(ventana) = app.get_webview_window("main") {
+                let _ = ventana.unminimize();
+                let _ = ventana.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
@@ -156,10 +172,15 @@ pub fn run() {
                     db: Arc::new(db.clone()),
                 })));
 
-            app.manage(AppState::new(
+            let estado = AppState::new(
                 auth, config, socios, caja, acciones, creditos, cierre, deuda, liquidacion, reportes,
                 respaldo,
-            ));
+            );
+            // Doble clic en un respaldo desde el Explorador: Windows lo pasa como argumento.
+            if let Some(ruta) = ruta_de_respaldo(&std::env::args().collect::<Vec<_>>()) {
+                estado.fijar_archivo_pendiente(ruta);
+            }
+            app.manage(estado);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -239,7 +260,11 @@ pub fn run() {
             guardar_excel,
             crear_respaldo_cmd,
             restaurar_respaldo_cmd,
-            listar_respaldos_cmd
+            listar_respaldos_cmd,
+            inspeccionar_respaldo_cmd,
+            importar_respaldo_cmd,
+            archivo_pendiente_cmd,
+            olvidar_archivo_pendiente_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

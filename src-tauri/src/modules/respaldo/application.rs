@@ -1,4 +1,4 @@
-use super::domain::{Respaldo, RespaldoPort};
+use super::domain::{Respaldo, RespaldoPort, VistaRespaldo};
 use crate::core::error::AppError;
 use chrono::Local;
 use std::sync::Arc;
@@ -63,6 +63,27 @@ impl RespaldoService {
         self.repo.registrar_respaldo(banco_id, registro)?;
 
         Ok(())
+    }
+
+    /// Qué Bankomunal contiene el archivo y si ya está en este computador.
+    pub fn inspeccionar(&self, origen_ruta: &str) -> Result<VistaRespaldo, AppError> {
+        self.repo.inspeccionar_respaldo(origen_ruta)
+    }
+
+    /// Importa el respaldo: registra el Bankomunal si no estaba o reemplaza sus datos.
+    pub fn importar(&self, origen_ruta: &str, usuario: &str) -> Result<VistaRespaldo, AppError> {
+        let vista = self.repo.importar_respaldo(origen_ruta)?;
+        self.repo.registrar_respaldo(
+            &vista.id,
+            Respaldo {
+                id: Uuid::new_v4().to_string(),
+                fecha: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                usuario: usuario.to_string(),
+                ruta_archivo: origen_ruta.to_string(),
+                tipo: "IMPORTACION".to_string(),
+            },
+        )?;
+        Ok(vista)
     }
 
     pub fn listar_historial(&self, banco_id: &str) -> Result<Vec<Respaldo>, AppError> {

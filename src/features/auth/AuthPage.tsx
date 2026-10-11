@@ -4,6 +4,9 @@ import { authService } from './authService';
 import { Bankomunal } from '../../core/types';
 import { MONEDAS } from '../../core/lib/monedas';
 import { mensajeDeError } from '../../core/lib/errores';
+import { open } from '@tauri-apps/plugin-dialog';
+import { ImportarRespaldo } from '../respaldo/ImportarRespaldo';
+import { EXTENSION_RESPALDO } from '../respaldo/types';
 
 export function AuthPage() {
     const [password, setPassword] = useState('');
@@ -11,6 +14,7 @@ export function AuthPage() {
     const [banks, setBanks] = useState<Bankomunal[]>([]);
     const [error, setError] = useState('');
     const [showCreate, setShowCreate] = useState(false);
+    const [rutaImportar, setRutaImportar] = useState<string | null>(null);
 
     // Bank creation form
     const [newBank, setNewBank] = useState({ nombre: '', ubicacion: '', moneda: 'COP' });
@@ -70,6 +74,20 @@ export function AuthPage() {
             navigate('/app/dashboard');
         } catch (err) {
             setError(mensajeDeError(err, 'Error al seleccionar banco'));
+        }
+    };
+
+    /** Elegir un archivo de respaldo para dejar su Bankomunal en este equipo. */
+    const elegirRespaldo = async () => {
+        try {
+            const ruta = await open({
+                title: 'Seleccionar respaldo de un Bankomunal',
+                filters: [{ name: 'Respaldo de Bankomunal', extensions: [EXTENSION_RESPALDO, 'db', 'bk'] }],
+                multiple: false, directory: false,
+            });
+            if (ruta) setRutaImportar(ruta as string);
+        } catch (err) {
+            setError(mensajeDeError(err, 'No se pudo abrir el archivo'));
         }
     };
 
@@ -152,7 +170,11 @@ export function AuthPage() {
                             <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>Guardar e ingresar</button>
                         </div>
                     </form>
+                    <button type="button" className="create-bank-btn" style={{ marginTop: '1rem' }} onClick={elegirRespaldo}>
+                        ¿Tiene un respaldo? Importar respaldo…
+                    </button>
                 </div>
+                {rutaImportar && <ImportarRespaldo ruta={rutaImportar} onCerrar={() => setRutaImportar(null)} />}
             </div>
         );
     }
@@ -181,7 +203,11 @@ export function AuthPage() {
                 <button className="create-bank-btn" onClick={() => setShowCreate(true)}>
                     + Crear otro Bankomunal
                 </button>
+                <button className="create-bank-btn" style={{ marginLeft: '0.75rem' }} onClick={elegirRespaldo}>
+                    Importar respaldo…
+                </button>
             </div>
+            {rutaImportar && <ImportarRespaldo ruta={rutaImportar} onCerrar={() => setRutaImportar(null)} />}
         </div>
     );
 }
