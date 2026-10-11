@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { authService } from './authService';
 import { Bankomunal } from '../../core/types';
 import { MONEDAS } from '../../core/lib/monedas';
+import { mensajeDeError } from '../../core/lib/errores';
 
 export function AuthPage() {
     const [password, setPassword] = useState('');
@@ -39,8 +40,8 @@ export function AuthPage() {
             } else {
                 setError('Contraseña incorrecta');
             }
-        } catch (err: any) {
-            setError(err?.toString() || 'Error al iniciar sesión');
+        } catch (err) {
+            setError(mensajeDeError(err, 'Error al iniciar sesión'));
         }
     };
 
@@ -58,8 +59,8 @@ export function AuthPage() {
             } else {
                 setBanks(bankList); // RF-05: dos o más → pantalla de selección.
             }
-        } catch (err: any) {
-            setError(err?.toString() || 'Error al cargar los Bankomunales');
+        } catch (err) {
+            setError(mensajeDeError(err, 'Error al cargar los Bankomunales'));
         }
     };
 
@@ -67,8 +68,8 @@ export function AuthPage() {
         try {
             await authService.seleccionarBankomunal(id);
             navigate('/app/dashboard');
-        } catch (err: any) {
-            setError(err?.toString() || 'Error al seleccionar banco');
+        } catch (err) {
+            setError(mensajeDeError(err, 'Error al seleccionar banco'));
         }
     };
 
@@ -87,8 +88,8 @@ export function AuthPage() {
             });
             await authService.seleccionarBankomunal(bank.id);
             navigate('/app/dashboard');
-        } catch (err: any) {
-            setError(err?.toString() || 'Error al crear el Bankomunal');
+        } catch (err) {
+            setError(mensajeDeError(err, 'Error al crear el Bankomunal'));
         }
     };
 
@@ -96,6 +97,7 @@ export function AuthPage() {
         return (
             <div className="auth-container">
                 <div className="auth-card">
+                    <img className="auth-logo" src="/bankomunales.svg" alt="" />
                     <h1 className="auth-title">Bankomunales</h1>
                     <p className="auth-sub">Administración de Bancos Comunitarios</p>
                     <form onSubmit={handleLogin}>
@@ -122,6 +124,7 @@ export function AuthPage() {
         return (
             <div className="auth-container">
                 <div className="auth-card">
+                    <img className="auth-logo" src="/bankomunales.svg" alt="" />
                     <h1 className="auth-title">Nuevo Bankomunal</h1>
                     <p className="auth-sub">Registra un Bankomunal en este equipo</p>
 
@@ -157,6 +160,7 @@ export function AuthPage() {
     return (
         <div className="auth-container">
             <div className="select-wrap">
+                <img className="auth-logo" src="/bankomunales.svg" alt="" />
                 <h1 className="auth-title">Bankomunales</h1>
                 <p className="auth-sub">Seleccione un Bankomunal para trabajar</p>
 

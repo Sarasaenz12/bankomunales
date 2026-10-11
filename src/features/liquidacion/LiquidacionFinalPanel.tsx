@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { liquidacionService } from './liquidacionService';
 import { DatosLiquidacion, LiquidacionFinal, ParametrosLiquidacion, SocioLiquidacion } from './types';
 import { fmt, fmtNum, parseNum } from '../../core/lib/format';
+import { mensajeDeError } from '../../core/lib/errores';
 
 // El dinero del Bankomunal va en pesos enteros (COP, sin centavos): el campo muestra el
 // valor con separador de miles y sólo admite dígitos.
@@ -32,7 +33,7 @@ export function LiquidacionFinalPanel({ moneda }: { moneda: string }) {
     useEffect(() => {
         liquidacionService.prepararLiquidacionFinal()
             .then(d => { setDatos(d); setResultado(null); })
-            .catch(e => setError(e?.toString() ?? 'No se pudieron cargar los datos'));
+            .catch(e => setError(mensajeDeError(e, 'No se pudieron cargar los datos')));
     }, []);
 
     function setParam<K extends keyof ParametrosLiquidacion>(campo: K, valor: number) {
@@ -53,8 +54,8 @@ export function LiquidacionFinalPanel({ moneda }: { moneda: string }) {
         setError('');
         try {
             setResultado(await liquidacionService.calcularLiquidacionFinal(datos.parametros, datos.socios));
-        } catch (e: any) {
-            setError(e?.toString() ?? 'No se pudo calcular la liquidación');
+        } catch (e) {
+            setError(mensajeDeError(e, 'No se pudo calcular la liquidación'));
         }
     }
 
@@ -129,17 +130,65 @@ export function LiquidacionFinalPanel({ moneda }: { moneda: string }) {
 
             {resultado && (
                 <>
-                    {/* ── Totales del Banko ── */}
-                    <div className="text-sm text-muted mt-4" style={{ marginBottom: '0.5rem' }}>Resultado del Banko</div>
-                    <div className="grid-dos">
-                        <div>Fondo de crédito (créditos + caja): <strong>{fmt(resultado.fondo_credito, moneda)}</strong></div>
-                        <div>− Incobrables: <strong>{fmt(resultado.incobrables, moneda)}</strong></div>
-                        <div>Fondo sano: <strong>{fmt(resultado.fondo_sano, moneda)}</strong></div>
-                        <div>− Reservas (gastos + incobrables): <strong>{fmt(resultado.reserva_gastos + resultado.reserva_incobrables, moneda)}</strong></div>
-                        <div>Capital real del BK: <strong>{fmt(resultado.capital_real, moneda)}</strong></div>
-                        <div>− Monto de acciones ({resultado.acciones_activas} × nominal): <strong>{fmt(resultado.monto_acciones, moneda)}</strong></div>
-                        <div className="total-line">Ganancia general del BK: <strong>{fmt(resultado.ganancia_general, moneda)}</strong></div>
-                        <div className="total-line">Ganancia por acción: <strong>{fmt(resultado.valor_ganancia_accion, moneda)}</strong> ({resultado.total_caps_ganancia} caps)</div>
+                    <div className="text-sm text-muted mt-4" style={{ marginBottom: '0.5rem' }}>
+                        Resultado del Banko — paso a paso
+                    </div>
+                    <div className="liquidacion-calculo">
+                        <div className="liquidacion-paso">
+                            <span className="liquidacion-paso-numero">1</span>
+                            <div>
+                                <div>Fondo bruto: créditos por cobrar + caja</div>
+                                <div className="liquidacion-formula">
+                                    {fmt(resultado.creditos_por_cobrar, moneda)} + {fmt(resultado.caja, moneda)}
+                                </div>
+                            </div>
+                            <strong>{fmt(resultado.fondo_credito, moneda)}</strong>
+                        </div>
+                        <div className="liquidacion-paso">
+                            <span className="liquidacion-paso-numero">2</span>
+                            <div>
+                                <div>Fondo sano: fondo bruto − incobrables</div>
+                                <div className="liquidacion-formula">
+                                    {fmt(resultado.fondo_credito, moneda)} − {fmt(resultado.incobrables, moneda)}
+                                </div>
+                            </div>
+                            <strong>{fmt(resultado.fondo_sano, moneda)}</strong>
+                        </div>
+                        <div className="liquidacion-paso">
+                            <span className="liquidacion-paso-numero">3</span>
+                            <div>
+                                <div>Capital real: fondo sano − reservas</div>
+                                <div className="liquidacion-formula">
+                                    {fmt(resultado.fondo_sano, moneda)} − {fmt(resultado.reserva_gastos + resultado.reserva_incobrables, moneda)}
+                                </div>
+                            </div>
+                            <strong>{fmt(resultado.capital_real, moneda)}</strong>
+                        </div>
+                        <div className="liquidacion-paso">
+                            <span className="liquidacion-paso-numero">4</span>
+                            <div>
+                                <div>{resultado.ganancia_general < 0 ? 'Pérdida' : 'Ganancia'} general: capital real − capital aportado por acciones</div>
+                                <div className="liquidacion-formula">
+                                    {fmt(resultado.capital_real, moneda)} − {resultado.acciones_activas} acciones × {fmt(p.valor_nominal, moneda)}
+                                </div>
+                            </div>
+                            <strong>{fmt(resultado.ganancia_general, moneda)}</strong>
+                        </div>
+                        <div className="liquidacion-paso liquidacion-paso-final">
+                            <span className="liquidacion-paso-numero">5</span>
+                            <div>
+                                <div>{resultado.ganancia_general < 0 ? 'Pérdida' : 'Ganancia'} por acción: resultado general ÷ acciones con derecho a ganancia</div>
+                                <div className="liquidacion-formula">
+                                    {fmt(resultado.ganancia_general, moneda)} ÷ {resultado.total_caps_ganancia} acciones
+                                    {' '}(el sistema redondea al peso)
+                                </div>
+                            </div>
+                            <strong>{fmt(resultado.valor_ganancia_accion, moneda)}</strong>
+                        </div>
+                    </div>
+                    <div className="text-sm text-muted mt-4">
+                        El capital aportado se calcula con las acciones activas. La ganancia o pérdida se distribuye entre
+                        las acciones con derecho a ganancia, que pueden ser una cantidad distinta.
                     </div>
 
                     {/* ── Detalle por socio ── */}

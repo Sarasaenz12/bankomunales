@@ -3,7 +3,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import {
     LayoutDashboard, Settings, Users, TrendingUp, CreditCard,
     Calculator, CalendarCheck, BarChart2, HardDrive, ClipboardList,
-    ArrowLeftRight, Building2
+    ArrowLeftRight
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { Bankomunal } from '../types';
@@ -32,7 +32,7 @@ export function AppLayout() {
             {/* ── SIDEBAR ── */}
             <aside className="sidebar">
                 <div className="sidebar-brand">
-                    <Building2 size={22} />
+                    <img className="sidebar-brand-logo" src="/bankomunales.svg" alt="" />
                     <div>
                         <div className="sidebar-brand-title">Bankomunales</div>
                         <div className="sidebar-brand-sub">{bank?.nombre ?? '...'}</div>
